@@ -25,6 +25,18 @@ func TestOmitServiceClientPrefs(t *testing.T) {
 	}.Check(t)
 }
 
+func TestOmitPinning(t *testing.T) {
+	const msg = "unexpected with ts_omit_pinning"
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_pinning,ts_include_cli",
+		BadDeps: map[string]string{
+			"tailscale.com/feature/pinning": msg,
+		},
+	}.Check(t)
+}
+
 func TestOmitSSH(t *testing.T) {
 	const msg = "unexpected with ts_omit_ssh"
 	deptest.DepChecker{
