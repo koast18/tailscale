@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -503,7 +504,7 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type TestEnv struct {
 	t                      testing.TB
 	tunMode                bool
-	windowsService         bool // run tailscaled as a Windows service
+	windowsRun             bool // tests are running on Windows
 	cli                    string
 	daemon                 string
 	loopbackPort           *int
@@ -561,7 +562,7 @@ func NewTestEnv(t testing.TB, opts ...TestEnvOpt) *TestEnv {
 	binaries := GetBinaries(t)
 	e := &TestEnv{
 		t:                 t,
-		windowsService:    runtime.GOOS == "windows",
+		windowsRun:        runtime.GOOS == "windows",
 		cli:               binaries.Tailscale.Path,
 		daemon:            binaries.Tailscaled.Path,
 		LogCatcher:        logc,
@@ -603,15 +604,85 @@ type TestNode struct {
 	upFlagGOOS   string // if non-empty, sets TS_DEBUG_UP_FLAG_GOOS for cmd/tailscale CLI
 	encryptState bool
 	allowUpdates bool
+	serviceMode  bool // run as the Windows service rather than a child process
+	forcePeer    bool // never run as the Windows service, even if the slot is free
 
 	mu        sync.Mutex
 	onLogLine []func([]byte)
 	lc        *local.Client
 }
 
+// writeBlankEnvFile writes an empty env file for the node and returns its path.
+func (n *TestNode) writeBlankEnvFile() string {
+	t := n.env.t
+	t.Helper()
+	path := filepath.Join(n.dir, "tailscaled-env.txt")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
+	}
+	return path
+}
+
+// TestNodeOpt represents an option that can be passed to NewTestNode.
+type TestNodeOpt interface {
+	modifyTestNode(*TestNode)
+}
+
+type asPeerOpt struct{}
+
+func (asPeerOpt) modifyTestNode(n *TestNode) { n.forcePeer = true }
+
+// AsPeer runs the node as a userspace-networking peer instead of the Windows service.
+func AsPeer() TestNodeOpt { return asPeerOpt{} }
+
+// serviceSlot tracks the running Windows service node, as a host has room for only one.
+var serviceSlot struct {
+	sync.Mutex
+	holder *TestNode
+}
+
+// resolveWindowsRole makes the node the Windows service if the slot is free, else a peer.
+func (n *TestNode) resolveWindowsRole() {
+	t := n.env.t
+	t.Helper()
+	serviceSlot.Lock()
+	defer serviceSlot.Unlock()
+	switch held := serviceSlot.holder; {
+	case held == n:
+		return
+	case held != nil:
+		if held.env.t != n.env.t {
+			t.Fatal("service slot held by another test; Windows integration tests must run serially")
+		}
+	case !n.forcePeer:
+		n.serviceMode = true
+		serviceSlot.holder = n
+		t.Cleanup(n.releaseServiceSlot)
+	}
+	if n.serviceMode {
+		n.sockFile = paths.DefaultTailscaledSocket()
+		n.stateFile = paths.DefaultTailscaledStateFile()
+		return
+	}
+	n.forcePeer = true
+	if !strings.HasPrefix(n.sockFile, `\\.\pipe\tailscale-test-`) {
+		// safesocket on Windows needs a named pipe, not a file path.
+		n.sockFile = `\\.\pipe\tailscale-test-` + rands.HexString(8)
+	}
+}
+
+// releaseServiceSlot frees the service slot so a later node in the test can take it.
+func (n *TestNode) releaseServiceSlot() {
+	serviceSlot.Lock()
+	defer serviceSlot.Unlock()
+	if serviceSlot.holder == n {
+		serviceSlot.holder = nil
+	}
+}
+
 // NewTestNode allocates a temp directory for a new test node.
 // The node is not started automatically.
-func NewTestNode(t *testing.T, env *TestEnv) *TestNode {
+func NewTestNode(t *testing.T, env *TestEnv, opts ...TestNodeOpt) *TestNode {
 	dir := t.TempDir()
 	sockFile := filepath.Join(dir, "tailscale.sock")
 	if len(sockFile) >= 104 {
@@ -620,17 +691,18 @@ func NewTestNode(t *testing.T, env *TestEnv) *TestNode {
 		t.Cleanup(func() { os.Remove(sockFile) })
 	}
 	stateFile := filepath.Join(dir, "tailscaled.state") // matches what cmd/tailscaled uses
-	if env.windowsService {
-		// A LocalSystem service ignores --socket/--statedir and uses the
-		// default pipe and state path; point the harness at those.
-		sockFile = paths.DefaultTailscaledSocket()
-		stateFile = paths.DefaultTailscaledStateFile()
-	}
 	n := &TestNode{
 		env:       env,
 		dir:       dir,
 		sockFile:  sockFile,
 		stateFile: stateFile,
+	}
+	for _, o := range opts {
+		o.modifyTestNode(n)
+	}
+	if env.windowsRun {
+		// The role decides the socket and state paths a LocalSystem service forces.
+		n.resolveWindowsRole()
 	}
 
 	// Look for a data race or panic.
@@ -804,13 +876,27 @@ func (d *Daemon) MustCleanShutdown(t testing.TB) {
 		d.svc.stopService()
 		return
 	}
-	d.Process.Signal(os.Interrupt)
-	ps, err := d.Process.Wait()
-	if err != nil {
-		t.Fatalf("tailscaled Wait: %v", err)
+	if err := interruptProcess(d.Process); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		t.Errorf("interrupting tailscaled: %v; killing", err)
+		d.Process.Kill()
 	}
-	if ps.ExitCode() != 0 {
-		t.Errorf("tailscaled ExitCode = %d; want 0", ps.ExitCode())
+	done := make(chan *os.ProcessState, 1)
+	go func() {
+		ps, _ := d.Process.Wait()
+		done <- ps
+	}()
+	select {
+	case ps := <-done:
+		if ps == nil {
+			t.Fatalf("tailscaled Wait failed")
+		}
+		if ps.ExitCode() != 0 {
+			t.Errorf("tailscaled ExitCode = %d; want 0", ps.ExitCode())
+		}
+	case <-time.After(30 * time.Second):
+		t.Errorf("tailscaled did not exit within 30s of the interrupt; killing")
+		d.Process.Kill()
+		<-done
 	}
 }
 
@@ -882,7 +968,7 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		t.Fatalf("awaitTailscaledRunnable: %v", err)
 	}
 
-	if n.env.windowsService {
+	if n.serviceMode {
 		// TODO(#20443): plumb service logs here so races/panics/DEBUG-ADDR are seen in service mode.
 		n.tailscaledParser = &nodeOutputParser{n: n}
 		return n.startWindowsServiceDaemon()
@@ -895,6 +981,10 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		"--socks5-server=localhost:0",
 		"--debug=localhost:0",
 	)
+	if runtime.GOOS == "windows" {
+		// Windows defaults to a fixed port, which would collide with the service node.
+		cmd.Args = append(cmd.Args, "--port=0")
+	}
 	if *verboseTailscaled {
 		cmd.Args = append(cmd.Args, "-verbose=2")
 	}
@@ -916,7 +1006,18 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = io.MultiWriter(cmd.Stderr, os.Stderr)
 	}
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS == "windows" {
+		// On Windows, tailscaled always reads environment variables from
+		// %programdata%\Tailscale\tailscaled-env.txt if the file exists and
+		// TS_DEBUG_ENV_FILE isn't set.
+		//
+		// Therefore, to prevent tailscaled from reading environment variables
+		// from the global file, we need to point it to an empty file.
+		// The environment variables to be used by the daemon are instead passed
+		// via cmd.Env.
+		cmd.Env = append(cmd.Env, "TS_DEBUG_ENV_FILE="+n.writeBlankEnvFile())
+		setNewProcessGroup(cmd)
+	} else {
 		pr, pw, err := os.Pipe()
 		if err != nil {
 			t.Fatal(err)

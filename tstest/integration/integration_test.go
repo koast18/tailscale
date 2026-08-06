@@ -877,9 +877,6 @@ func TestConfigFileAuthKey(t *testing.T) {
 }
 
 func TestTwoNodes(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
-	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 
@@ -918,10 +915,11 @@ func TestTwoNodes(t *testing.T) {
 		os.WriteFile("n2.log", cleanLog(n2), 0666)
 	})
 
-	n1Socks := n1.AwaitSocksAddr(n1SocksAddrCh)
-	n2Socks := n1.AwaitSocksAddr(n2SocksAddrCh)
-	t.Logf("node1 SOCKS5 addr: %v", n1Socks)
-	t.Logf("node2 SOCKS5 addr: %v", n2Socks)
+	if runtime.GOOS != "windows" {
+		// TODO(yaruk): the service node has no stderr to scrape the address from; see #20443.
+		t.Logf("node1 SOCKS5 addr: %v", n1.AwaitSocksAddr(n1SocksAddrCh))
+		t.Logf("node2 SOCKS5 addr: %v", n1.AwaitSocksAddr(n2SocksAddrCh))
+	}
 
 	n1.AwaitListening()
 	t.Logf("n1 is listening")
@@ -965,9 +963,6 @@ func TestTwoNodes(t *testing.T) {
 // tests two nodes where the first gets a incremental MapResponse (with only
 // PeersRemoved set) saying that the second node disappeared.
 func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
-	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 
@@ -1055,9 +1050,6 @@ func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 // This covers VIP additions at runtime, where the VIP route is not reachable
 // before the map mutation but is reachable over TSMP afterward.
 func TestIncrementalMapUpdatePeerAllowedIPsReachability(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
-	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 
@@ -1353,14 +1345,12 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 // jailed node cannot initiate connections to the other node however the other
 // node can initiate connections to the jailed node.
 func TestClientSideJailing(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
-	}
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/17419")
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	registerNode := func() (*TestNode, key.NodePublic) {
-		n := NewTestNode(t, env)
+		// Both nodes must be peers; the dial being tested only reaches the listener in userspace mode.
+		n := NewTestNode(t, env, AsPeer())
 		n.StartDaemon()
 		n.AwaitListening()
 		n.MustUp()
@@ -1468,9 +1458,6 @@ func TestClientSideJailing(t *testing.T) {
 // TestNATPing creates two nodes, n1 and n2, sets up masquerades for both and
 // tries to do bi-directional pings between them.
 func TestNATPing(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
-	}
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/12169")
 	tstest.Parallel(t)
 	for _, v6 := range []bool{false, true} {
@@ -1599,9 +1586,6 @@ func TestNATPing(t *testing.T) {
 }
 
 func TestLogoutRemovesAllPeers(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
-	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	// Spin up some nodes.
@@ -2211,9 +2195,6 @@ func TestEncryptStateMigration(t *testing.T) {
 // relay between all 3 nodes, and "tailscale debug peer-relay-sessions" returns
 // expected values.
 func TestPeerRelayPing(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
-	}
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/17251")
 	tstest.Parallel(t)
 
@@ -2354,9 +2335,6 @@ func TestPeerRelayPing(t *testing.T) {
 }
 
 func TestC2NDebugNetmap(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
-	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t, ConfigureControl(func(s *testcontrol.Server) {
 		s.CollectServices = opt.False
@@ -2495,13 +2473,10 @@ func TestC2NDebugNetmap(t *testing.T) {
 }
 
 func TestTailnetLock(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
-	}
 	// If you run `tailscale lock log` on a node where Tailnet Lock isn't
 	// enabled, you get an error explaining that.
 	t.Run("log-when-not-enabled", func(t *testing.T) {
-		t.Parallel()
+		tstest.Parallel(t)
 
 		env := NewTestEnv(t)
 		n1 := NewTestNode(t, env)
@@ -2538,7 +2513,7 @@ func TestTailnetLock(t *testing.T) {
 	// the signed nodes can talk to each other but the unsigned node cannot
 	// talk to anybody.
 	t.Run("node-connectivity", func(t *testing.T) {
-		t.Parallel()
+		tstest.Parallel(t)
 
 		env := NewTestEnv(t)
 		env.Control.DefaultNodeCapabilities = &tailcfg.NodeCapMap{
@@ -2613,7 +2588,7 @@ func TestTailnetLock(t *testing.T) {
 	t.Run("no-keys-is-error", func(t *testing.T) {
 		for _, verb := range []string{"add", "remove", "revoke-keys"} {
 			t.Run(verb, func(t *testing.T) {
-				t.Parallel()
+				tstest.Parallel(t)
 
 				env := NewTestEnv(t)
 				n1 := NewTestNode(t, env)
@@ -2639,12 +2614,10 @@ func TestTailnetLock(t *testing.T) {
 }
 
 func TestNodeWithBadStateFile(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("service harness can't seed a corrupt state file before start; see #20750")
-	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
-	n1 := NewTestNode(t, env)
+	// A peer keeps its state in the test's temp dir, where the corrupt file can be seeded.
+	n1 := NewTestNode(t, env, AsPeer())
 	if err := os.WriteFile(n1.stateFile, []byte("bad json"), 0644); err != nil {
 		t.Fatal(err)
 	}
