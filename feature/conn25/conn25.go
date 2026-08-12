@@ -142,6 +142,7 @@ func (e *extension) Init(host ipnext.Host) error {
 	e.ctxCancel = cancel
 	go e.sendLoop(ctx)
 	dph.StartFlowExpirySweepers(ctx)
+	e.conn25.connector.startExpirySweeper(ctx)
 	return nil
 }
 
@@ -414,8 +415,9 @@ func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip
 }
 
 type appAddr struct {
-	app  string
-	addr netip.Addr
+	app       string
+	addr      netip.Addr
+	createdAt time.Time
 }
 
 // Conn25 holds state for routing traffic for a domain via a connector.
@@ -458,6 +460,7 @@ func newConn25(logf logger.Logf) *Conn25 {
 	c.connector = &connector{
 		logf:      logf,
 		getIPSets: getIPSets,
+		clock:     tstime.StdClock{},
 	}
 	return c
 }
@@ -574,7 +577,13 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 		peerMap = make(map[netip.Addr]appAddr)
 		c.transitIPs[peerAddr] = peerMap
 	}
-	peerMap[tipr.TransitIP] = appAddr{addr: tipr.DestinationIP, app: tipr.App}
+	now := c.clock.Now()
+	peerMap[tipr.TransitIP] = appAddr{addr: tipr.DestinationIP, app: tipr.App, createdAt: now}
+	c.expiryQueue = append(c.expiryQueue, transitIPExpiryEntry{
+		peerIP:    peerAddr,
+		transitIP: tipr.TransitIP,
+		createdAt: now,
+	})
 	return TransitIPResponse{}
 }
 
@@ -1424,15 +1433,31 @@ func rewriteHTTPSResponse(hdr dnsmessage.Header, questions []dnsmessage.Question
 	return b.Finish()
 }
 
+// connectorTransitIPExpiry is the minimum length of time a peer+transitIP -> dstIP mapping will be held in the connector.
+// The longer this time is the larger the map will be in memory.
+// The shorter this time is the more often a client will try to use a mapping, find it doesn't exist anymore and have to re-register.
+// We are not (yet 2026-08-12) tracking either of those things, this is a guess at a reasonable duration.
+const connectorTransitIPExpiry = time.Hour
+
 type connector struct {
 	logf      logger.Logf
 	getIPSets func() ipSets
+	clock     tstime.Clock
 
 	// Remember to add new fields to [connector.reset] if needed.
 	mu sync.Mutex // protects the fields below
 	// transitIPs is a map of connector client peer IP -> client transitIPs that we update as connector client peers instruct us to, and then use to route traffic to its destination on behalf of connector clients.
 	// Note that each peer could potentially have two maps: one for its IPv4 address, and one for its IPv6 address. The transit IPs map for a given peer IP will contain transit IPs of the same family as the peer's IP.
 	transitIPs map[netip.Addr]map[netip.Addr]appAddr
+	// expiryQueue is processed by the goroutine from [connector.startExpirySweeper] so
+	// that transitIPs doesn't grow indefinitely.
+	expiryQueue []transitIPExpiryEntry
+}
+
+type transitIPExpiryEntry struct {
+	peerIP    netip.Addr
+	transitIP netip.Addr
+	createdAt time.Time
 }
 
 // realIPForTransitIPConnection is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
@@ -1473,6 +1498,69 @@ func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appA
 	return v, ok
 }
 
+// expireTransitIPs expires entries in the connectors transitIPs map that are
+// past their expiry time.
+// While the client keeps track of the datapath flow table and makes sure not
+// to expire state for flows that are in use, the connector just expires
+// peer+transitIP -> dstIP state at minimum 1 hour [connectorTransitIPExpiry]
+// after it is registered.
+// If a client tries to use a mapping that is expired the connector will send a
+// TSMP error and the client will reregister the mapping.
+// If this causes too much reregistry we can extend the expiry time or we may
+// have to track flows or similar.
+func (c *connector) expireTransitIPs(now time.Time) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var removed, consumed int
+	for i, e := range c.expiryQueue {
+		if i > 100000 {
+			// don't just keep  going if we have an unexpectedly large number of expiries
+			// give up the lock and expect we will handle the backlog over time
+			break
+		}
+		if now.Sub(e.createdAt) < connectorTransitIPExpiry {
+			// the queue is ordered by createdAt there will be no entries to expire after this
+			break
+		}
+		consumed++
+
+		peerMap, ok := c.transitIPs[e.peerIP]
+		if !ok {
+			continue
+		}
+		// it's possible the original mapping was overwritten with a different
+		// appAddr for the dstIP. In that case the createdAt dates will not match
+		// and there is nothing to do (there'll be a new expiryQueue entry for the
+		// new mapping later).
+		if aa, ok := peerMap[e.transitIP]; ok && aa.createdAt.Equal(e.createdAt) {
+			delete(peerMap, e.transitIP)
+			removed++
+			if len(peerMap) == 0 {
+				delete(c.transitIPs, e.peerIP)
+			}
+		}
+	}
+	if consumed > 0 {
+		c.expiryQueue = slices.Delete(c.expiryQueue, 0, consumed)
+	}
+	return removed
+}
+
+func (c *connector) startExpirySweeper(ctx context.Context) {
+	ticker, tickerCh := c.clock.NewTicker(5 * time.Minute)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tickerCh:
+				c.expireTransitIPs(c.clock.Now())
+			}
+		}
+	}()
+}
+
 // reset clears all internal state of [connector], that are not configuration
 // passed into it.
 func (c *connector) reset() {
@@ -1480,6 +1568,7 @@ func (c *connector) reset() {
 	defer c.mu.Unlock()
 
 	c.transitIPs = make(map[netip.Addr]map[netip.Addr]appAddr)
+	c.expiryQueue = nil
 }
 
 type addrs struct {
