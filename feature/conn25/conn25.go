@@ -9,6 +9,7 @@ package conn25
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"encoding/json"
 	"errors"
@@ -415,9 +416,9 @@ func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip
 }
 
 type appAddr struct {
-	app       string
-	addr      netip.Addr
-	createdAt time.Time
+	app         string
+	addr        netip.Addr
+	expiryEntry *list.Element
 }
 
 // Conn25 holds state for routing traffic for a domain via a connector.
@@ -458,9 +459,10 @@ func newConn25(logf logger.Logf) *Conn25 {
 		getIPSets:   getIPSets,
 	}
 	c.connector = &connector{
-		logf:      logf,
-		getIPSets: getIPSets,
-		clock:     tstime.StdClock{},
+		logf:        logf,
+		getIPSets:   getIPSets,
+		clock:       tstime.StdClock{},
+		expiryQueue: list.New(),
 	}
 	return c
 }
@@ -577,13 +579,17 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 		peerMap = make(map[netip.Addr]appAddr)
 		c.transitIPs[peerAddr] = peerMap
 	}
-	now := c.clock.Now()
-	peerMap[tipr.TransitIP] = appAddr{addr: tipr.DestinationIP, app: tipr.App, createdAt: now}
-	c.expiryQueue = append(c.expiryQueue, transitIPExpiryEntry{
+	// if there's already an entry for this peer+transitIP, clean up the expiryQueue entry
+	if prev, ok := peerMap[tipr.TransitIP]; ok && prev.expiryEntry != nil {
+		c.expiryQueue.Remove(prev.expiryEntry)
+	}
+	// create a new expiryQueue entry
+	elem := c.expiryQueue.PushBack(&transitIPExpiryEntry{
 		peerIP:    peerAddr,
 		transitIP: tipr.TransitIP,
-		createdAt: now,
+		createdAt: c.clock.Now(),
 	})
+	peerMap[tipr.TransitIP] = appAddr{addr: tipr.DestinationIP, app: tipr.App, expiryEntry: elem}
 	return TransitIPResponse{}
 }
 
@@ -1451,7 +1457,7 @@ type connector struct {
 	transitIPs map[netip.Addr]map[netip.Addr]appAddr
 	// expiryQueue is processed by the goroutine from [connector.startExpirySweeper] so
 	// that transitIPs doesn't grow indefinitely.
-	expiryQueue []transitIPExpiryEntry
+	expiryQueue *list.List
 }
 
 type transitIPExpiryEntry struct {
@@ -1511,37 +1517,30 @@ func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appA
 func (c *connector) expireTransitIPs(now time.Time) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	var removed, consumed int
-	for i, e := range c.expiryQueue {
-		if i > 100000 {
-			// don't just keep  going if we have an unexpectedly large number of expiries
-			// give up the lock and expect we will handle the backlog over time
+	removed := 0
+	// handle at most 100000 entries, don't just keep  going if we have an
+	// unexpectedly large number of expiries, give up the lock and expect we will
+	// handle the backlog over time.
+	for i := 0; i < 100000; i++ {
+		front := c.expiryQueue.Front()
+		if front == nil {
 			break
 		}
+		e := front.Value.(*transitIPExpiryEntry)
 		if now.Sub(e.createdAt) < connectorTransitIPExpiry {
-			// the queue is ordered by createdAt there will be no entries to expire after this
+			// the list is ordered by createdAt there will be no entries to expire after this
 			break
 		}
-		consumed++
-
+		c.expiryQueue.Remove(front)
 		peerMap, ok := c.transitIPs[e.peerIP]
 		if !ok {
 			continue
 		}
-		// it's possible the original mapping was overwritten with a different
-		// appAddr for the dstIP. In that case the createdAt dates will not match
-		// and there is nothing to do (there'll be a new expiryQueue entry for the
-		// new mapping later).
-		if aa, ok := peerMap[e.transitIP]; ok && aa.createdAt.Equal(e.createdAt) {
-			delete(peerMap, e.transitIP)
-			removed++
-			if len(peerMap) == 0 {
-				delete(c.transitIPs, e.peerIP)
-			}
+		delete(peerMap, e.transitIP)
+		removed++
+		if len(peerMap) == 0 {
+			delete(c.transitIPs, e.peerIP)
 		}
-	}
-	if consumed > 0 {
-		c.expiryQueue = slices.Delete(c.expiryQueue, 0, consumed)
 	}
 	return removed
 }
@@ -1568,7 +1567,7 @@ func (c *connector) reset() {
 	defer c.mu.Unlock()
 
 	c.transitIPs = make(map[netip.Addr]map[netip.Addr]appAddr)
-	c.expiryQueue = nil
+	c.expiryQueue.Init()
 }
 
 type addrs struct {

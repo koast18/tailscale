@@ -2715,7 +2715,7 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 		t.Fatalf("expireTransitIPs removed %d mappings, want 2", got)
 	}
 	c.connector.mu.Lock()
-	if len(c.connector.expiryQueue) != 0 {
+	if c.connector.expiryQueue.Len() != 0 {
 		t.Fatalf("queue should be all done now")
 	}
 	if _, ok := c.connector.transitIPs[peerA]; ok {
@@ -2736,15 +2736,15 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 	}
 	// go past expiry time out
 	clock.Advance(61 * time.Minute)
-	if got := c.connector.expireTransitIPs(clock.Now()); got != 100001 {
-		t.Fatalf("expireTransitIPs removed %d mappings, want 100001, the limit for one run", got)
+	if got := c.connector.expireTransitIPs(clock.Now()); got != 100000 {
+		t.Fatalf("expireTransitIPs removed %d mappings, want 100000, the limit for one run", got)
 	}
 	c.connector.mu.Lock()
-	if len(c.connector.expiryQueue) != 2 {
+	if c.connector.expiryQueue.Len() != 3 {
 		t.Fatalf("expected 2 items remaining in queue")
 	}
-	if len(c.connector.transitIPs[peerA]) != 2 {
-		t.Fatalf("expected 2 items remaining in peerA transitIPs")
+	if len(c.connector.transitIPs[peerA]) != 3 {
+		t.Fatalf("expected 3 items remaining in peerA transitIPs")
 	}
 	c.connector.mu.Unlock()
 }
