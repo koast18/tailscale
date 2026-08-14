@@ -53,6 +53,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/set"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
@@ -1441,6 +1442,32 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) 
 	return filter.DropSilently, gro
 }
 
+// gcpInternalDNSAddr is 169.254.169.254: GCP's instance metadata API (tcp/80)
+// and internal DNS resolver (udp+tcp/53).
+var gcpInternalDNSAddr = netip.MustParseAddr(cloudenv.GoogleMetadataAndDNSIP)
+
+// metricViaHostScopedDrop counts refused 4via6 forwards to host-scoped targets.
+var metricViaHostScopedDrop = clientmetric.NewCounter("netstack_via_host_scoped_dropped")
+
+// viaTargetAllowed reports whether ip:port may be forwarded to after unmapping a 4via6
+// destination. Port is 0 for ICMP. The packet filter only sees the outer via address,
+// so this is the sole check on the embedded IPv4 target.
+func viaTargetAllowed(ip netip.Addr, port uint16) bool {
+	if !ip.Is4() {
+		return false // UnmapVia only returns IPv4
+	} else if ip.IsLoopback() || ip.IsMulticast() || ip.IsUnspecified() || ip == v4broadcast {
+		return false
+	} else if tsaddr.IsTailscaleIP(ip) {
+		// 100.64/10 routes to tailscale0, not to any site LAN
+		// dialing it would proxy into the tailnet under the nodes network view
+		return false
+	} else if ip.IsLinkLocalUnicast() {
+		// Permit GCP DNS only; block metadata and other link-local targets
+		return ip == gcpInternalDNSAddr && port == 53
+	}
+	return true
+}
+
 // shouldHandlePing returns whether or not netstack should handle an incoming
 // ICMP echo request packet, and the IP address that should be pinged from this
 // process. The IP address can be different from the destination in the packet
@@ -1474,7 +1501,13 @@ func (ns *Impl) shouldHandlePing(p *packet.Parsed) (_ netip.Addr, ok bool) {
 		// IPv4 and expect to get a useful result. However, in this specific
 		// case things are safe because the 'userPing' function doesn't make
 		// use of the input packet.
-		return tsaddr.UnmapVia(destIP), true
+		unmapped := tsaddr.UnmapVia(destIP)
+		if !viaTargetAllowed(unmapped, 0) {
+			// Don't relay pings to host-scoped targets to avoid an oracle
+			metricViaHostScopedDrop.Add(1)
+			return netip.Addr{}, false
+		}
+		return unmapped, true
 	}
 
 	// If we get here, we don't do anything unless this netstack instance
@@ -1542,7 +1575,8 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 
 	dstAddrPort := netip.AddrPortFrom(dialIP, reqDetails.LocalPort)
 
-	if viaRange.Contains(dialIP) {
+	isVia := viaRange.Contains(dialIP)
+	if isVia {
 		isTailscaleIP = false
 		dialIP = tsaddr.UnmapVia(dialIP)
 	}
@@ -1554,6 +1588,15 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			ns.removeSubnetAddress(dialIP)
 		}
 	}()
+
+	if isVia && !viaTargetAllowed(dialIP, reqDetails.LocalPort) {
+		// Refuse host-scoped 4via6 targets with a RST
+		metricViaHostScopedDrop.Add(1)
+		ns.logf("netstack: rejecting TCP connection to host-scoped 4via6 target %v from %v",
+			netip.AddrPortFrom(dialIP, reqDetails.LocalPort), clientRemoteAddrPort)
+		r.Complete(true) // sends a RST
+		return
+	}
 
 	var wq waiter.Queue
 
@@ -2048,6 +2091,15 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 	} else {
 		if dstIP := dstAddr.Addr(); viaRange.Contains(dstIP) {
 			dstAddr = netip.AddrPortFrom(tsaddr.UnmapVia(dstIP), dstAddr.Port())
+			if !viaTargetAllowed(dstAddr.Addr(), dstAddr.Port()) {
+				// Close the client endpoint: the guard is attacker-triggerable
+				// per packet, so a bare return would leak gVisor endpoints.
+				metricViaHostScopedDrop.Add(1)
+				ns.logf("netstack: dropping UDP flow to host-scoped 4via6 target %v from %v",
+					dstAddr, clientAddr)
+				client.Close()
+				return
+			}
 		}
 		backendRemoteAddr = net.UDPAddrFromAddrPort(dstAddr)
 		if dstAddr.Addr().Is4() {
