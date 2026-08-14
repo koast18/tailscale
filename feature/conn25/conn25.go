@@ -1582,7 +1582,7 @@ func (c *connector) reset() {
 	defer c.mu.Unlock()
 
 	c.transitIPs = make(map[netip.Addr]map[netip.Addr]appAddr)
-	c.expiryQueue.Init()
+	c.expiryQueue = list.New()
 }
 
 type addrs struct {
