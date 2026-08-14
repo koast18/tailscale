@@ -2699,10 +2699,10 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 
 	c.connector.mu.Lock()
 	if _, ok := c.connector.transitIPs[peerA][tipOne]; ok {
-		t.Fatalf("expected oldTip %v to be removed from the map", tipOne)
+		t.Fatalf("expected tipOne %v to be removed from the map", tipOne)
 	}
 	if _, ok := c.connector.transitIPs[peerA][tipTwo]; !ok {
-		t.Fatalf("expected freshTip %v to remain in the map", tipTwo)
+		t.Fatalf("expected tipTwo %v to remain in the map", tipTwo)
 	}
 	if _, ok := c.connector.transitIPs[peerB]; ok {
 		t.Fatalf("expected peerB sub-map to be pruned after its only mapping expired")
@@ -2741,7 +2741,7 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 	}
 	c.connector.mu.Lock()
 	if c.connector.expiryQueue.Len() != 3 {
-		t.Fatalf("expected 2 items remaining in queue")
+		t.Fatalf("expected 3 items remaining in queue")
 	}
 	if len(c.connector.transitIPs[peerA]) != 3 {
 		t.Fatalf("expected 3 items remaining in peerA transitIPs")

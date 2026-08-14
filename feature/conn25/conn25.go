@@ -1504,7 +1504,7 @@ func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appA
 	return v, ok
 }
 
-// expireTransitIPs expires entries in the connectors transitIPs map that are
+// expireTransitIPs expires entries in the connector's transitIPs map that are
 // past their expiry time.
 // While the client keeps track of the datapath flow table and makes sure not
 // to expire state for flows that are in use, the connector just expires
@@ -1548,7 +1548,7 @@ func (c *connector) expireTransitIPs(now time.Time) int {
 		return nRemoved, false
 	}
 
-	// handle at most 100,000 entries, don't just keep  going if we have an
+	// handle at most 100,000 entries, don't just keep going if we have an
 	// unexpectedly large number of expiries, we will handle the backlog over time.
 	for i := 0; i < 1000; i++ {
 		nRemoved, finished := doChunk(100)
