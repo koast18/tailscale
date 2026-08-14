@@ -1515,31 +1515,46 @@ func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appA
 // If this causes too much reregistry we can extend the expiry time or we may
 // have to track flows or similar.
 func (c *connector) expireTransitIPs(now time.Time) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	removed := 0
-	// handle at most 100000 entries, don't just keep  going if we have an
-	// unexpectedly large number of expiries, give up the lock and expect we will
-	// handle the backlog over time.
-	for i := 0; i < 100000; i++ {
-		front := c.expiryQueue.Front()
-		if front == nil {
+
+	// doChunk takes the chunk size and returns the number of removed entries and
+	// whether there's still work to do.
+	// Used to allow other goroutines a chance to grab the mutex while we work.
+	doChunk := func(n int) (int, bool) {
+		nRemoved := 0
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for i := 0; i < n; i++ {
+			front := c.expiryQueue.Front()
+			if front == nil {
+				return nRemoved, true
+			}
+			e := front.Value.(*transitIPExpiryEntry)
+			if now.Sub(e.createdAt) < connectorTransitIPExpiry {
+				// the list is ordered by createdAt there will be no entries to expire after this
+				return nRemoved, true
+			}
+			c.expiryQueue.Remove(front)
+			peerMap, ok := c.transitIPs[e.peerIP]
+			if !ok {
+				continue
+			}
+			delete(peerMap, e.transitIP)
+			removed++
+			if len(peerMap) == 0 {
+				delete(c.transitIPs, e.peerIP)
+			}
+		}
+		return nRemoved, false
+	}
+
+	// handle at most 100,000 entries, don't just keep  going if we have an
+	// unexpectedly large number of expiries, we will handle the backlog over time.
+	for i := 0; i < 1000; i++ {
+		nRemoved, finished := doChunk(100)
+		removed += nRemoved
+		if finished {
 			break
-		}
-		e := front.Value.(*transitIPExpiryEntry)
-		if now.Sub(e.createdAt) < connectorTransitIPExpiry {
-			// the list is ordered by createdAt there will be no entries to expire after this
-			break
-		}
-		c.expiryQueue.Remove(front)
-		peerMap, ok := c.transitIPs[e.peerIP]
-		if !ok {
-			continue
-		}
-		delete(peerMap, e.transitIP)
-		removed++
-		if len(peerMap) == 0 {
-			delete(c.transitIPs, e.peerIP)
 		}
 	}
 	return removed
