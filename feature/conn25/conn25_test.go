@@ -383,8 +383,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 								i, j, len(wantLookup))
 						}
 						pip, tip, wantDip := wantLookup[0], wantLookup[1], wantLookup[2]
-						aa, _ := c.connector.lookupBySrcIPAndTransitIP(pip, tip)
-						gotDip := aa.addr
+						gotDip, _ := c.connector.lookupAddrBySrcIPAndTransitIP(pip, tip)
 						if gotDip != wantDip {
 							t.Errorf("wrong result on lookup[%d][%d] ([%v], [%v]): got [%v] expected [%v]",
 								i, j, pip, tip, gotDip, wantDip)

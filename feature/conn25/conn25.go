@@ -1471,11 +1471,7 @@ type transitIPExpiryEntry struct {
 func (c *connector) realIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	v, ok := c.lookupBySrcIPAndTransitIP(srcIP, transitIP)
-	if ok {
-		return v.addr, true
-	}
-	return netip.Addr{}, false
+	return c.lookupAddrBySrcIPAndTransitIP(srcIP, transitIP)
 }
 
 const packetFilterAllowReason = "app connector transit IP"
@@ -1495,13 +1491,13 @@ func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
 	return false, ""
 }
 
-func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appAddr, bool) {
+func (c *connector) lookupAddrBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (netip.Addr, bool) {
 	m, ok := c.transitIPs[srcIP]
 	if !ok || m == nil {
-		return appAddr{}, false
+		return netip.Addr{}, false
 	}
 	v, ok := m[transitIP]
-	return v, ok
+	return v.addr, ok
 }
 
 // expireTransitIPs expires entries in the connector's transitIPs map that are
