@@ -1540,7 +1540,7 @@ func (c *connector) expireTransitIPs(now time.Time) int {
 				continue
 			}
 			delete(peerMap, e.transitIP)
-			removed++
+			nRemoved++
 			if len(peerMap) == 0 {
 				delete(c.transitIPs, e.peerIP)
 			}
