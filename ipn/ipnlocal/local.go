@@ -276,6 +276,7 @@ type LocalBackend struct {
 	getTCPHandlerForFunnelFlow func(srcAddr netip.AddrPort, dstPort uint16) (handler func(net.Conn))
 
 	containsViaIPFuncAtomic                 syncs.AtomicValue[func(netip.Addr) bool]     // TODO(nickkhyl): move to nodeBackend
+	viaRoutesAtomic                         syncs.AtomicValue[[]netip.Prefix]            // TODO(nickkhyl): move to nodeBackend
 	shouldInterceptTCPPortAtomic            syncs.AtomicValue[func(uint16) bool]         // TODO(nickkhyl): move to nodeBackend
 	shouldInterceptVIPServicesTCPPortAtomic syncs.AtomicValue[func(netip.AddrPort) bool] // TODO(nickkhyl): move to nodeBackend
 	numClientStatusCalls                    atomic.Uint32                                // TODO(nickkhyl): move to nodeBackend
@@ -4557,6 +4558,7 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 
 	if !p.Valid() {
 		b.containsViaIPFuncAtomic.Store(ipset.FalseContainsIPFunc())
+		b.viaRoutesAtomic.Store(nil)
 		b.setTCPPortsIntercepted(nil)
 		if f, ok := hookServeClearVIPServicesTCPPortsInterceptedLocked.GetOk(); ok {
 			f(b)
@@ -4566,6 +4568,7 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	} else {
 		filtered := tsaddr.FilterPrefixesCopy(p.AdvertiseRoutes(), tsaddr.IsViaPrefix)
 		b.containsViaIPFuncAtomic.Store(ipset.NewContainsIPFunc(views.SliceOf(filtered)))
+		b.viaRoutesAtomic.Store(filtered)
 		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(p)
 	}
 }
@@ -7060,6 +7063,11 @@ func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
 		return f(ip)
 	}
 	return false
+}
+
+// ViaRoutes returns the node's advertised 4via6 routes, with prefix lengths.
+func (b *LocalBackend) ViaRoutes() []netip.Prefix {
+	return b.viaRoutesAtomic.Load()
 }
 
 // Logout logs out the current profile, if any, and waits for the logout to

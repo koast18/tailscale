@@ -1468,6 +1468,42 @@ func viaTargetAllowed(ip netip.Addr, port uint16) bool {
 	return true
 }
 
+// viaEmbeddedIsNetOrBcast reports whether the IPv4 target embedded in via is
+// the network or directed-broadcast address of the most specific via route
+// containing it.
+func viaEmbeddedIsNetOrBcast(via netip.Addr, routes []netip.Prefix) bool {
+	best := -1
+	for _, r := range routes {
+		if r.Contains(via) && r.Bits() > best {
+			best = r.Bits()
+		}
+	}
+	v4bits := best - 96 // via routes embed the IPv4 prefix after 96 bits
+	if v4bits < 0 || v4bits > 30 {
+		return false // no matching route, or v4 /31-/32: no network/broadcast
+	}
+	embedded := tsaddr.UnmapVia(via)
+	p := netip.PrefixFrom(embedded, v4bits).Masked()
+	if embedded == p.Addr() {
+		return true // network address
+	}
+	m := net.CIDRMask(v4bits, 32)
+	b := p.Addr().As4()
+	for i := range b {
+		b[i] |= ^m[i]
+	}
+	return embedded == netip.AddrFrom4(b) // directed broadcast
+}
+
+// viaIsNetOrBcast reports whether via's embedded IPv4 target is the network
+// or directed-broadcast address of its most specific advertised via route.
+func (ns *Impl) viaIsNetOrBcast(via netip.Addr) bool {
+	if ns.lb == nil {
+		return false
+	}
+	return viaEmbeddedIsNetOrBcast(via, ns.lb.ViaRoutes())
+}
+
 // shouldHandlePing returns whether or not netstack should handle an incoming
 // ICMP echo request packet, and the IP address that should be pinged from this
 // process. The IP address can be different from the destination in the packet
@@ -1502,7 +1538,7 @@ func (ns *Impl) shouldHandlePing(p *packet.Parsed) (_ netip.Addr, ok bool) {
 		// case things are safe because the 'userPing' function doesn't make
 		// use of the input packet.
 		unmapped := tsaddr.UnmapVia(destIP)
-		if !viaTargetAllowed(unmapped, 0) {
+		if !viaTargetAllowed(unmapped, 0) || ns.viaIsNetOrBcast(destIP) {
 			// Don't relay pings to host-scoped targets to avoid an oracle
 			metricViaHostScopedDrop.Add(1)
 			return netip.Addr{}, false
@@ -1576,8 +1612,10 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	dstAddrPort := netip.AddrPortFrom(dialIP, reqDetails.LocalPort)
 
 	isVia := viaRange.Contains(dialIP)
+	var viaIP netip.Addr
 	if isVia {
 		isTailscaleIP = false
+		viaIP = dialIP
 		dialIP = tsaddr.UnmapVia(dialIP)
 	}
 
@@ -1589,7 +1627,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		}
 	}()
 
-	if isVia && !viaTargetAllowed(dialIP, reqDetails.LocalPort) {
+	if isVia && (!viaTargetAllowed(dialIP, reqDetails.LocalPort) || ns.viaIsNetOrBcast(viaIP)) {
 		// Refuse host-scoped 4via6 targets with a RST
 		metricViaHostScopedDrop.Add(1)
 		ns.logf("netstack: rejecting TCP connection to host-scoped 4via6 target %v from %v",
@@ -2091,7 +2129,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 	} else {
 		if dstIP := dstAddr.Addr(); viaRange.Contains(dstIP) {
 			dstAddr = netip.AddrPortFrom(tsaddr.UnmapVia(dstIP), dstAddr.Port())
-			if !viaTargetAllowed(dstAddr.Addr(), dstAddr.Port()) {
+			if !viaTargetAllowed(dstAddr.Addr(), dstAddr.Port()) || ns.viaIsNetOrBcast(dstIP) {
 				// Close the client endpoint: the guard is attacker-triggerable
 				// per packet, so a bare return would leak gVisor endpoints.
 				metricViaHostScopedDrop.Add(1)

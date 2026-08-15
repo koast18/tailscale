@@ -1389,9 +1389,38 @@ func TestViaTargetAllowed(t *testing.T) {
 		{"169.254.0.1", 53, false},     // other link-local
 		{"127.0.0.1", 53, false},       // loopback, even on the DNS port
 		{"127.255.0.1", 8080, false},
-		{"0.0.0.0", 80, false}, // Linux connect() treats as localhost
+		{"10.9.4.99", 53, true},       // normal LAN host
+		{"192.168.50.254", 443, true}, // last routable host on a /24 still allowed
+		{"0.0.0.0", 80, false},        // Linux connect() treats as localhost
 		{"255.255.255.255", 67, false},
-		{"224.0.0.1", 80, false},
+		{"192.168.50.128", 80, true},
+		{"10.100.200.5", 22, true},
+		{"10.1.2.255", 443, true}, // broadcast-ness is route-dependent; see TestViaEmbeddedIsNetOrBcast
+		{"172.16.0.9", 8080, true},
+		{"192.168.50.63", 80, true},
+		{"224.0.0.1", 82, false}, // multicast
+		{"239.255.252.250", 1900, false},
+		{"10.20.30.40", 53, true},
+		{"198.51.100.7", 443, true},
+		{"169.254.169.1", 1234, false}, // other link-local
+		{"255.0.0.5", 80, true},        // not a broadcast boundary (last octet is 5)
+		{"10.9.8.7", 53, true},
+		{"192.168.1.254", 22, true},
+		{"10.0.255.200", 80, true}, // host in a /16 whose last octet isn't 0/255
+		{"224.0.0.251", 5353, false},
+		{"100.64.9.8", 8080, false},
+		{"192.168.5.10", 443, true},
+		{"172.16.255.254", 22, true}, // last host of a /16 (last octet 254) allowed
+		{"127.1.2.3", 80, false},
+		{"198.18.0.10", 443, true},
+		{"239.255.255.250", 1900, false}, // SSDP multicast
+		{"192.168.50.128", 53, true},
+		{"169.254.100.200", 80, false}, // non-GCP link-local blocked
+		{"10.9.4.255", 22, true},       // broadcast-ness is route-dependent; see TestViaEmbeddedIsNetOrBcast
+		{"224.0.1.129", 5353, false},
+		{"8.20.30.40", 80, true},
+		{"192.168.50.255", 53, true}, // broadcast-ness is route-dependent; see TestViaEmbeddedIsNetOrBcast
+		{"10.11.12.13", 443, true},
 		{"239.1.2.3", 5353, false},
 		{"100.64.0.1", 80, false}, // tailnet CGNAT: would proxy as this node
 		{"100.100.100.100", 53, false},
@@ -1407,6 +1436,50 @@ func TestViaTargetAllowed(t *testing.T) {
 
 // TestShouldHandlePingViaHostScoped verifies that ping relay for 4via6
 // addresses embedding host-scoped IPv4 destinations is refused.
+func TestViaEmbeddedIsNetOrBcast(t *testing.T) {
+	via99 := func(v4cidr string) netip.Prefix {
+		t.Helper()
+		p, err := tsaddr.MapVia(99, netip.MustParsePrefix(v4cidr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	slash24 := via99("10.1.2.0/24")
+	slash16 := via99("10.0.0.0/16")
+	slash25 := via99("10.9.0.0/25")
+	slash32 := via99("10.7.7.7/32")
+
+	cases := []struct {
+		name   string
+		v4     string
+		routes []netip.Prefix
+		want   bool
+	}{
+		{"Slash24Host", "10.1.2.5", []netip.Prefix{slash24}, false},
+		{"Slash24Network", "10.1.2.0", []netip.Prefix{slash24}, true},
+		{"Slash24Broadcast", "10.1.2.255", []netip.Prefix{slash24}, true},
+		{"Slash16Host255", "10.0.5.255", []netip.Prefix{slash16}, false}, // legit host in a /16
+		{"Slash16Network", "10.0.0.0", []netip.Prefix{slash16}, true},
+		{"Slash16Broadcast", "10.0.255.255", []netip.Prefix{slash16}, true},
+		{"Slash25Broadcast", "10.9.0.127", []netip.Prefix{slash25}, true},
+		{"Slash25Host", "10.9.0.5", []netip.Prefix{slash25}, false},
+		{"Slash32NoBroadcast", "10.7.7.7", []netip.Prefix{slash32}, false},
+		{"NoRoutes", "10.1.2.255", nil, false},
+		{"OutsideRoute", "10.9.0.128", []netip.Prefix{slash25}, false},                                         // not contained; filter rejects earlier
+		{"ShorterMatchAlone", "10.1.2.255", []netip.Prefix{via99("10.1.0.0/16")}, false},                       // host under the /16
+		{"LongestMatchWins", "10.1.2.255", []netip.Prefix{via99("10.1.0.0/16"), via99("10.1.2.128/25")}, true}, // broadcast under the more specific /25
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			via := mustVia99(t, tc.v4)
+			if got := viaEmbeddedIsNetOrBcast(via, tc.routes); got != tc.want {
+				t.Errorf("viaEmbeddedIsNetOrBcast(%v, %v) = %v, want %v", via, tc.routes, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestShouldHandlePingViaHostScoped(t *testing.T) {
 	srcIP := netip.AddrFrom4([4]byte{1, 2, 3, 4})
 	pingPkt := func(dst netip.Addr) *packet.Parsed {
@@ -1460,6 +1533,12 @@ func TestShouldHandlePingViaHostScoped(t *testing.T) {
 // must still be forwarded.
 func TestAcceptTCPViaHostScoped(t *testing.T) {
 	viaPrefix := netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:63::/96") // site 99
+	// A more specific via route for a /24 site LAN; longest-prefix match makes
+	// 10.0.0.0 and 10.0.0.255 its network and directed-broadcast addresses.
+	siteLAN, err := tsaddr.MapVia(99, netip.MustParsePrefix("10.0.0.0/24"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name string
@@ -1472,6 +1551,9 @@ func TestAcceptTCPViaHostScoped(t *testing.T) {
 		{"LoopbackBlocked", netip.AddrPortFrom(mustVia99(t, "127.0.0.1"), 22), false},
 		{"TailscaleCGNATBlocked", netip.AddrPortFrom(mustVia99(t, "100.64.3.4"), 80), false},
 		{"SiteHostAllowed", netip.AddrPortFrom(mustVia99(t, "10.0.0.1"), 80), true},
+		{"SiteNetworkBlocked", netip.AddrPortFrom(mustVia99(t, "10.0.0.0"), 80), false},
+		{"SiteBroadcastBlocked", netip.AddrPortFrom(mustVia99(t, "10.0.0.255"), 80), false},
+		{"SiteLastHostAllowed", netip.AddrPortFrom(mustVia99(t, "10.0.0.254"), 80), true},
 	}
 
 	for _, tc := range cases {
@@ -1479,9 +1561,9 @@ func TestAcceptTCPViaHostScoped(t *testing.T) {
 			impl := makeNetstack(t, func(impl *Impl) {
 				impl.ProcessSubnets = true
 			})
-			// Advertise the via prefix so ShouldHandleViaIP accepts the dst
+			// Advertise the via prefixes so ShouldHandleViaIP accepts the dst
 			prefs := ipn.NewPrefs()
-			prefs.AdvertiseRoutes = []netip.Prefix{viaPrefix}
+			prefs.AdvertiseRoutes = []netip.Prefix{viaPrefix, siteLAN}
 			impl.lb.Start(ipn.Options{UpdatePrefs: prefs})
 			impl.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
 
@@ -1544,6 +1626,15 @@ func TestForwardUDPViaHostScoped(t *testing.T) {
 		impl.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
 	})
 
+	// Advertise a via route for a /24 site LAN so route-aware checks apply.
+	siteLAN, err := tsaddr.MapVia(99, netip.MustParsePrefix("10.0.0.0/24"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefs := ipn.NewPrefs()
+	prefs.AdvertiseRoutes = []netip.Prefix{siteLAN}
+	impl.lb.Start(ipn.Options{UpdatePrefs: prefs})
+
 	client := tsaddr.Tailscale4To6(netip.MustParseAddr("100.101.102.103"))
 	blocked := []string{
 		"127.0.0.1",
@@ -1552,6 +1643,8 @@ func TestForwardUDPViaHostScoped(t *testing.T) {
 		"224.0.0.1",
 		"0.0.0.0",
 		"255.255.255.255",
+		"10.0.0.0",   // site LAN network address, per the advertised route
+		"10.0.0.255", // site LAN directed broadcast, per the advertised route
 	}
 	for i, v4 := range blocked {
 		dst := netip.AddrPortFrom(mustVia99(t, v4), 80)
