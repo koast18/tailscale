@@ -200,14 +200,22 @@ jobs:
           fi
           echo "using dylib: $DYLIB"
           SIMDATA="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data"
-          mkdir -p "$SIMDATA/tmp" "$SIMDATA/tmp/Documents"
-          echo "===== simulator filesystem probe ====="
-          xcrun simctl spawn "$UDID" /bin/sh -c 'echo MARKER1 > /tmp/marker.txt; echo MARKER2 > /var/tmp/marker2.txt; echo PROBE-OK'
-          echo "--- where did the markers land on the host? ---"
-          find "$SIMDATA" -name "marker*.txt" 2>/dev/null || echo "(markers not found under SIMDATA)"
-          # Push the test binary + dylib into the simulator's filesystem via stdin.
-          cat dist/dlopen_test_sim | xcrun simctl spawn "$UDID" /bin/sh -c 'cat > /tmp/dlopen_test_sim && chmod 755 /tmp/dlopen_test_sim && echo PUSHED-test-ok'
-          cat "$DYLIB" | xcrun simctl spawn "$UDID" /bin/sh -c 'cat > /tmp/TsCore-test.dylib && chmod 755 /tmp/TsCore-test.dylib && echo PUSHED-dylib-ok'
+          echo "===== locate sim /tmp mapping ====="
+          xcrun simctl spawn "$UDID" /bin/sh -c 'echo TS_MARKER_$$ > /tmp/tscore-marker.txt; echo WROTE_TMP'
+          xcrun simctl spawn "$UDID" /bin/sh -c 'echo TS_MARKER_$$ > /var/tmp/tscore-marker2.txt; echo WROTE_VARTMP'
+          M1=$(find "$SIMDATA" ~/Library/Developer/CoreSimulator -name 'tscore-marker.txt' -print -quit 2>/dev/null || true)
+          M2=$(find "$SIMDATA" ~/Library/Developer/CoreSimulator -name 'tscore-marker2.txt' -print -quit 2>/dev/null || true)
+          echo "marker1(/tmp) host path: $M1"
+          echo "marker2(/var/tmp) host path: $M2"
+          # Choose the host dir that maps to the sim's /tmp (fallback: /var/tmp mapping).
+          TMPDIR_HOST=""
+          if [ -n "$M1" ]; then TMPDIR_HOST="$(dirname "$M1")"; elif [ -n "$M2" ]; then TMPDIR_HOST="$(dirname "$M2")"; fi
+          echo "TMPDIR_HOST=$TMPDIR_HOST" >> "$GITHUB_ENV"
+          if [ -z "$TMPDIR_HOST" ]; then echo "(could not map sim tmp; skipping sim tests)"; exit 0; fi
+          mkdir -p "$TMPDIR_HOST/Documents"
+          cp "$DYLIB" "$TMPDIR_HOST/TsCore-test.dylib"
+          cp dist/dlopen_test_sim "$TMPDIR_HOST/"
+          echo "copied test files to host-side sim tmp: $TMPDIR_HOST"
           run_watchdog() {
             local secs="$1"; shift
             local out="$1"; shift
