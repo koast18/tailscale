@@ -203,14 +203,21 @@ jobs:
           echo "===== locate sim /tmp mapping ====="
           xcrun simctl spawn "$UDID" /bin/sh -c 'echo TS_MARKER_$$ > /tmp/tscore-marker.txt; echo WROTE_TMP'
           xcrun simctl spawn "$UDID" /bin/sh -c 'echo TS_MARKER_$$ > /var/tmp/tscore-marker2.txt; echo WROTE_VARTMP'
-          M1=$(find "$SIMDATA" ~/Library/Developer/CoreSimulator -name 'tscore-marker.txt' -print -quit 2>/dev/null || true)
-          M2=$(find "$SIMDATA" ~/Library/Developer/CoreSimulator -name 'tscore-marker2.txt' -print -quit 2>/dev/null || true)
+          RUNTIME_ROOT="$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; r=json.load(sys.stdin)["runtimes"][0]; print(r.get("bundlePath",""))')/Contents/Resources/RuntimeRoot"
+          echo "RUNTIME_ROOT=$RUNTIME_ROOT"
+          M1=$(find "$SIMDATA" "$RUNTIME_ROOT" ~/Library/Developer/CoreSimulator -name 'tscore-marker.txt' -print -quit 2>/dev/null || true)
+          M2=$(find "$SIMDATA" "$RUNTIME_ROOT" ~/Library/Developer/CoreSimulator -name 'tscore-marker2.txt' -print -quit 2>/dev/null || true)
           echo "marker1(/tmp) host path: $M1"
           echo "marker2(/var/tmp) host path: $M2"
-          # Choose the host dir that maps to the sim's /tmp (fallback: /var/tmp mapping).
           TMPDIR_HOST=""
           if [ -n "$M1" ]; then TMPDIR_HOST="$(dirname "$M1")"; elif [ -n "$M2" ]; then TMPDIR_HOST="$(dirname "$M2")"; fi
           echo "TMPDIR_HOST=$TMPDIR_HOST" >> "$GITHUB_ENV"
+          if [ -z "$TMPDIR_HOST" ]; then
+            echo "(could not map sim tmp; trying /private/var/folders scan)"
+            M3=$(find /private/var/folders -name 'tscore-marker.txt' -print -quit 2>/dev/null || true)
+            echo "marker1 in /private/var/folders: $M3"
+            if [ -n "$M3" ]; then TMPDIR_HOST="$(dirname "$M3")"; echo "TMPDIR_HOST=$TMPDIR_HOST" >> "$GITHUB_ENV"; fi
+          fi
           if [ -z "$TMPDIR_HOST" ]; then echo "(could not map sim tmp; skipping sim tests)"; exit 0; fi
           mkdir -p "$TMPDIR_HOST/Documents"
           cp "$DYLIB" "$TMPDIR_HOST/TsCore-test.dylib"
