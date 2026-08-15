@@ -7,8 +7,8 @@
 # internal lock, so that pthread_create can deadlock. This workflow therefore
 # verifies two variants on REAL Apple runtimes:
 #
-#   plain — constructor intact (dyld starts the Go runtime at dlopen)
-#   lazy  — initializer section stripped (cmd/tscore/tools/stripinits.py);
+#   plain - constructor intact (dyld starts the Go runtime at dlopen)
+#   lazy  - initializer section stripped (cmd/tscore/tools/stripinits.py);
 #           the host calls TsEnsureInit() after dlopen
 #
 # Tests:
@@ -62,7 +62,7 @@ jobs:
           done
 
       # ------------------------------------------------------------------
-      # macOS control (native dlopen) — validates runtime + lazy machinery
+      # macOS control (native dlopen) - validates runtime + lazy machinery
       # ------------------------------------------------------------------
       - name: Build macOS control dylibs
         run: |
@@ -124,7 +124,7 @@ jobs:
           grep -h "TEST-PASS" mac-plain.log mac-lazy.log
 
       # ------------------------------------------------------------------
-      # iOS Simulator — real iOS dyld/libSystem dlopen test
+      # iOS Simulator - real iOS dyld/libSystem dlopen test
       # ------------------------------------------------------------------
       - name: Build simulator dylibs
         run: |
