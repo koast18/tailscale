@@ -98,6 +98,7 @@ static void logLine(NSMutableString *buf, NSString *line) {
     logLine(out, [NSString stringWithFormat:@"TsVersion -> %s", v ? v : "(null)"]);
 
     // TsInit: create the tsnet.Server singleton (no network connection yet).
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     NSString *stateDir = [paths.firstObject stringByAppendingPathComponent:@"tsstate"];
     int rc = init(stateDir.UTF8String, "verify-node");
     logLine(out, [NSString stringWithFormat:@"TsInit -> %d (0 = OK)", rc]);
