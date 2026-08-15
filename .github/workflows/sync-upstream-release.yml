@@ -1,12 +1,12 @@
 # Polls the upstream tailscale/tailscale repo for new releases and, when a
-# new (non-pre) version appears, re-points that version tag at this fork's
-# main (which contains cmd/tscore) and force-pushes it. The push triggers the
-# ios-dylib workflow (v* tag trigger), which builds libTailscaleCore.dylib
-# and creates a GitHub Release.
+# new (non-pre) version appears, directly calls the ios-dylib workflow to
+# build libTailscaleCore.dylib and publish a GitHub Release named after the
+# upstream version.
 #
 # GitHub cannot receive cross-repo release events, so this runs on a cron.
 # It is idempotent: a version whose Release already exists on this fork is
-# skipped, so a tag is only (re)pushed when there is actual new work to do.
+# skipped, and the build workflow itself skips re-creating an existing
+# Release.
 name: Sync upstream Tailscale releases
 
 on:
@@ -19,12 +19,13 @@ permissions:
   contents: write
 
 jobs:
-  sync:
+  check:
     runs-on: ubuntu-latest
+    outputs:
+      upstream: ${{ steps.check.outputs.upstream }}
     steps:
-      - uses: actions/checkout@v4
-
       - name: Check upstream latest non-pre release
+        id: check
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -40,10 +41,11 @@ jobs:
             exit 0
           fi
 
-          # Point the tag at this fork's main HEAD (which contains cmd/tscore;
-          # the tag inherited from upstream points at a commit without it) and
-          # force-push. The ios-dylib workflow triggers on v* tag pushes and
-          # builds + creates the Release.
-          git tag -f "$UPSTREAM"
-          git push -f origin "$UPSTREAM"
-          echo "::notice::Pushed tag $UPSTREAM; ios-dylib workflow will build and release."
+          echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    if: needs.check.outputs.upstream != ''
+    uses: ./.github/workflows/ios-dylib.yml
+    with:
+      release_tag: ${{ needs.check.outputs.upstream }}
