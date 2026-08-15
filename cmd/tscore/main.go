@@ -17,6 +17,31 @@ package main
 
 /*
 #include <stdlib.h>
+#include <stdio.h>
+#include <time.h>
+#include <string.h>
+
+// Boot trace: writes a line as soon as dyld runs this dylib's constructors,
+// BEFORE the Go runtime initializes. This lets us tell whether a black screen
+// is caused by (a) dyld/ctor entry, (b) Go runtime init, or (c) a later Ts*
+// call. Log goes to <LC_HOME_PATH>/Documents/tscore-boot.log (the LiveContainer
+// sandbox path) or /tmp as a fallback.
+__attribute__((constructor))
+static void tscore_ctor_trace(void) {
+    const char *home = getenv("LC_HOME_PATH");
+    char p[1024];
+    if (home && *home) {
+        snprintf(p, sizeof p, "%s/Documents/tscore-boot.log", home);
+    } else {
+        snprintf(p, sizeof p, "/tmp/tscore-boot.log");
+    }
+    FILE *f = fopen(p, "a");
+    if (f) {
+        fprintf(f, "%lld ctor: dyld entering tscore constructors\n", (long long)time(NULL));
+        fclose(f);
+    }
+}
+
 
 typedef void (*TsLogFn)(const char* msg);
 typedef void (*TsStateFn)(int state);
@@ -34,6 +59,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,6 +79,26 @@ const (
 // coreVersion is stamped at build time via
 // -ldflags "-X main.coreVersion=$(git describe --tags --always ...)".
 var coreVersion = "dev"
+
+// bootLog appends a timestamped line to the sandbox-visible boot trace.
+func bootLog(format string, a ...any) {
+	p := "/tmp/tscore-boot.log"
+	if h := os.Getenv("LC_HOME_PATH"); h != "" {
+		p = filepath.Join(h, "Documents", "tscore-boot.log")
+	}
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(f, "%d %s\n", time.Now().Unix(), fmt.Sprintf(format, a...))
+	f.Close()
+}
+
+func init() {
+	// Runs right after Go runtime init finishes (still inside the dyld
+	// constructor / first exported call), before the host UI appears.
+	bootLog("go-init: Go runtime init done, package inits done")
+}
 
 var (
 	mu sync.Mutex // guards all globals below
@@ -87,6 +133,7 @@ func currentState() int32 { return atomic.LoadInt32(&runState) }
 
 func setState(s int32) {
 	atomic.StoreInt32(&runState, s)
+	bootLog("state=%d", s)
 	if fn := stateCB; fn != nil {
 		C.cts_state(fn, C.int(s))
 	}
