@@ -21,15 +21,26 @@ cmd/tscore/
 ```bash
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 
-# arm64 slice
+# Note: Go does NOT support -buildmode=c-shared on ios/arm64 (hardcoded in
+# internal/platform). Compile with c-archive (its Mach-O carries a
+# __mod_init_func constructor, so the Go runtime initializes at dyld load
+# time), then link the archive into a dylib with clang.
+
+# 1) compile the Go core as a static archive (arm64 slice)
 CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
 CC="$(xcrun --find clang) -arch arm64 -isysroot $SDK -mios-version-min=15.0" \
 CGO_CFLAGS="-arch arm64 -isysroot $SDK -mios-version-min=15.0" \
 CGO_LDFLAGS="-arch arm64 -isysroot $SDK -mios-version-min=15.0" \
-go build -buildmode=c-shared -trimpath -ldflags "-s -w" \
-  -o libTailscaleCore-arm64.dylib ./cmd/tscore
+go build -buildmode=c-archive -trimpath -ldflags "-s -w" \
+  -o libTailscaleCore-arm64.a ./cmd/tscore
 
-# arm64e slice: repeat with GOARCH=arm64e and -arch arm64e, then merge:
+# 2) link the archive into a dylib (arm64 slice)
+clang -dynamiclib -arch arm64 -isysroot "$SDK" -mios-version-min=15.0 \
+  -Wl,-all_load -Wl,-ObjC libTailscaleCore-arm64.a \
+  -framework Foundation -framework Security -framework CoreFoundation \
+  -o libTailscaleCore-arm64.dylib
+
+# arm64e slice: repeat steps with GOARCH=arm64e / -arch arm64e, then merge:
 lipo -create libTailscaleCore-arm64.dylib libTailscaleCore-arm64e.dylib \
   -output libTailscaleCore.dylib
 ```
