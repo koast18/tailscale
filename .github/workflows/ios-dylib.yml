@@ -152,9 +152,9 @@ jobs:
           EOF
           sort /tmp/expected.txt -o /tmp/expected.txt
           nm -gU dist/libTailscaleCore.dylib \
+            | awk '{print $NF}' \
             | sed 's/^_//' \
             | grep -E '^Ts[A-Z]' \
-            | cut -d' ' -f1 \
             | sort -u > /tmp/actual.txt
           echo "--- missing symbols (must be empty) ---"
           comm -23 /tmp/expected.txt /tmp/actual.txt
