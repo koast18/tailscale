@@ -61,25 +61,64 @@ jobs:
           export GOTOOLCHAIN=local
           SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
           CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0"
-          mkdir -p dist
+          mkdir -p /tmp/probe/nocgo /tmp/probe/cgo
+          cat > /tmp/probe/nocgo/go.mod <<'EOF'
+          module nocgo
+          
+          go 1.26.6
+          EOF
+          cat > /tmp/probe/nocgo/main.go <<'EOF'
+          package main
+          
+          func main() {}
+          EOF
+          cat > /tmp/probe/cgo/go.mod <<'EOF'
+          module cgo
+          
+          go 1.26.6
+          EOF
+          cat > /tmp/probe/cgo/main.go <<'EOF'
+          package main
+          
+          import "C"
+          
+          //export Probe
+          func Probe() *C.char { return C.CString("x") }
+          
+          func main() {}
+          EOF
+          echo "=== A) c-shared, NO cgo: link? ctor? ==="
+          (cd /tmp/probe/nocgo && CGO_ENABLED=0 GOOS=ios GOARCH=arm64 go build -buildmode=c-shared -o /tmp/probe/nocgo.dylib .) && echo "A LINK OK" || echo "A LINK FAILED"
+          otool -l /tmp/probe/nocgo.dylib 2>/dev/null | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(A: no init sections)"
+          nm -gU /tmp/probe/nocgo.dylib 2>/dev/null | grep "_rt0_arm64" | head -3 || echo "(A: no rt0 syms)"
+          echo "=== B) c-shared, WITH cgo export: link? ctor? ==="
+          (cd /tmp/probe/cgo && CGO_ENABLED=1 GOOS=ios GOARCH=arm64 CC="${CC}" CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" go build -buildmode=c-shared -o /tmp/probe/cgo.dylib .) && echo "B LINK OK" || echo "B LINK FAILED"
+          otool -l /tmp/probe/cgo.dylib 2>/dev/null | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(B: no init sections)"
+          nm -gU /tmp/probe/cgo.dylib 2>/dev/null | grep "_rt0_arm64" | head -3 || echo "(B: no rt0 syms)"
+          echo "=== C) c-shared, current tscore (with lazy-init preamble): link? ctor? ==="
+          cd "$GITHUB_WORKSPACE"
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
-          CC="${CC}" \
-          CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
+          CC="${CC}" CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
           CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
-          go build -buildmode=c-shared -trimpath -ldflags "-s -w" \
-            -o dist/TsCore-cshared-sim.dylib ./cmd/tscore
-          echo "--- file ---"
-          file dist/TsCore-cshared-sim.dylib
-          echo "--- init sections ---"
-          otool -l dist/TsCore-cshared-sim.dylib | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(no init sections!)"
-          echo "--- key symbols ---"
-          nm -gU dist/TsCore-cshared-sim.dylib | grep -E "_rt0_arm64|cgo_wait|TsVersion|TsInit$|TsEnsureInit" | head -20
-          echo "--- Ts* count ---"
-          nm -gU dist/TsCore-cshared-sim.dylib | awk '{print $NF}' | sed 's/^_//' | grep -c '^Ts' || true
-          cp dist/TsCore-cshared-sim.dylib dist/TsCore-cshared-sim-lazy.dylib
-          python3 cmd/tscore/tools/stripinits.py dist/TsCore-cshared-sim-lazy.dylib
-          codesign -s - --force dist/TsCore-cshared-sim.dylib
-          codesign -s - --force dist/TsCore-cshared-sim-lazy.dylib
+          go build -buildmode=c-shared -trimpath -ldflags "-s -w" -o /tmp/probe/tscore-cur.dylib ./cmd/tscore && echo "C LINK OK" || echo "C LINK FAILED"
+          echo "=== D) c-archive + clang dylib, current tscore: rt0 defined in archive? ==="
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
+          CC="${CC}" CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
+          CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
+          go build -buildmode=c-archive -trimpath -ldflags "-s -w" -o /tmp/probe/tscore.a ./cmd/tscore
+          echo "rt0 defined count: $(nm -g /tmp/probe/tscore.a 2>/dev/null | grep -c 'T __rt0_arm64_ios_lib')"
+          clang -dynamiclib -arch arm64 -isysroot "${SDK}" -mios-simulator-version-min=15.0 -Wl,-all_load -Wl,-ObjC /tmp/probe/tscore.a -framework Foundation -framework Security -framework CoreFoundation -o /tmp/probe/tscore-d.dylib && echo "D LINK OK" || echo "D LINK FAILED"
+          otool -l /tmp/probe/tscore-d.dylib 2>/dev/null | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(D: no init sections)"
+          echo "=== E) c-shared tscore WITHOUT my preamble (git worktree at pre-change commit) ==="
+          cd "$GITHUB_WORKSPACE"
+          git worktree add -q /tmp/probe/wt 34353bce5 2>/dev/null || git worktree add -q /tmp/probe/wt HEAD
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
+          CC="${CC}" CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
+          CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
+          go build -buildmode=c-shared -trimpath -ldflags "-s -w" -o /tmp/probe/tscore-old.dylib ./cmd/tscore && echo "E LINK OK" || echo "E LINK FAILED"
+          otool -l /tmp/probe/tscore-old.dylib 2>/dev/null | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(E: no init sections)"
+          nm -gU /tmp/probe/tscore-old.dylib 2>/dev/null | grep -E "_rt0_arm64|cgo_wait" | head -5 || echo "(E: no rt0/cgo syms)"
+          git worktree remove --force /tmp/probe/wt 2>/dev/null || true
 
       - name: Build device c-shared dylibs
         continue-on-error: true
@@ -139,13 +178,19 @@ jobs:
       - name: Run simulator dlopen tests
         run: |
           set -uxo pipefail
-          if [ ! -f dist/TsCore-cshared-sim.dylib ] || [ ! -f dist/dlopen_test_sim ]; then
-            echo "c-shared sim dylib or host test missing; skipping"
+          DYLIB=""
+          for cand in dist/TsCore-cshared-sim.dylib /tmp/probe/tscore-old.dylib /tmp/probe/tscore-cur.dylib; do
+            if [ -f "$cand" ]; then DYLIB="$cand"; break; fi
+          done
+          if [ -z "$DYLIB" ] || [ ! -f dist/dlopen_test_sim ]; then
+            echo "no c-shared dylib or host test found; skipping sim run"
             exit 0
           fi
+          echo "using dylib: $DYLIB"
           SIMDATA="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data"
           mkdir -p "$SIMDATA/tmp" "$SIMDATA/tmp/Documents"
-          cp dist/TsCore-cshared-sim.dylib dist/TsCore-cshared-sim-lazy.dylib dist/dlopen_test_sim "$SIMDATA/tmp/"
+          cp "$DYLIB" "$SIMDATA/tmp/TsCore-test.dylib"
+          cp dist/dlopen_test_sim "$SIMDATA/tmp/"
           run_watchdog() {
             local secs="$1"; shift
             local out="$1"; shift
@@ -160,9 +205,14 @@ jobs:
             return $rc
           }
           echo "===== c-shared PLAIN variant (ctor under dlopen) ====="
-          run_watchdog 180 sim-plain.log env SIMCTL_CHILD_LC_HOME_PATH=/tmp xcrun simctl spawn "$UDID" /tmp/dlopen_test_sim /tmp/TsCore-cshared-sim.dylib || echo "RC=$? (non-zero; expected if ctor pthread_create deadlocks under dlopen)"
-          echo "===== c-shared LAZY variant (TsEnsureInit after dlopen) ====="
-          run_watchdog 180 sim-lazy.log env SIMCTL_CHILD_LC_HOME_PATH=/tmp xcrun simctl spawn "$UDID" /tmp/dlopen_test_sim /tmp/TsCore-cshared-sim-lazy.dylib --lazy || echo "RC=$? (non-zero)"
+          run_watchdog 180 sim-plain.log env SIMCTL_CHILD_LC_HOME_PATH=/tmp xcrun simctl spawn "$UDID" /tmp/dlopen_test_sim /tmp/TsCore-test.dylib || echo "RC=$? (non-zero; expected if ctor pthread_create deadlocks under dlopen)"
+          echo "===== c-shared LAZY variant (strip ctor + TsEnsureInit) ====="
+          if python3 cmd/tscore/tools/stripinits.py "$DYLIB" 2>/dev/null; then
+            cp "$DYLIB" "$SIMDATA/tmp/TsCore-test-lazy.dylib"
+            run_watchdog 180 sim-lazy.log env SIMCTL_CHILD_LC_HOME_PATH=/tmp xcrun simctl spawn "$UDID" /tmp/dlopen_test_sim /tmp/TsCore-test-lazy.dylib --lazy || echo "RC=$? (non-zero)"
+          else
+            echo "stripinits failed; lazy variant skipped"
+          fi
           echo "===== boot traces inside simulator ====="
           cat "$SIMDATA/tmp/tscore-boot.log" 2>/dev/null || true
           cat "$SIMDATA/tmp/Documents/tscore-boot.log" 2>/dev/null || echo "(no boot log found)"
