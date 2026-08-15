@@ -156,14 +156,38 @@ jobs:
           echo "--- device Ts* count ---"
           nm -gU dist/TsCore-cshared-device.dylib 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | grep -c '^Ts' || true
 
-      - name: Build simulator host test
+      - name: macOS native control (darwin c-shared + dlopen test)
         continue-on-error: true
         run: |
-          set -euxo pipefail
-          SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
-          clang -arch arm64 -isysroot "${SDK}" -mios-simulator-version-min=15.0 \
-            -o dist/dlopen_test_sim cmd/tscore/tools/dlopen_test.c
-          codesign -s - --force dist/dlopen_test_sim
+          set -uxo pipefail
+          export PATH="/tmp/go/bin:$PATH"
+          export GOTOOLCHAIN=local
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mmacosx-version-min=13.0"
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+          CC="${CC}" \
+          CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mmacosx-version-min=13.0" \
+          CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mmacosx-version-min=13.0" \
+          go build -buildmode=c-shared -trimpath -ldflags "-s -w" \
+            -o dist/TsCore-mac.dylib ./cmd/tscore && echo "MAC BUILD OK" || echo "MAC BUILD FAILED"
+          otool -l dist/TsCore-mac.dylib 2>/dev/null | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(mac: no init sections)"
+          nm -gU dist/TsCore-mac.dylib 2>/dev/null | grep -E "TsVersion|TsInit$|TsEnsureInit|cgo_wait" | head -6
+          clang -arch arm64 -isysroot "${SDK}" -mmacosx-version-min=13.0 \
+            -o dist/dlopen_test_mac cmd/tscore/tools/dlopen_test.c
+          echo "--- native dlopen test (plain) ---"
+          run_watchdog() {
+            local secs="$1"; shift; local out="$1"; shift
+            "$@" >"$out" 2>&1 & local pid=$!
+            ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) & local killer=$!
+            wait "$pid" 2>/dev/null || true
+            kill "$killer" 2>/dev/null || true
+            cat "$out"
+          }
+          run_watchdog 60 mac-plain.log ./dist/dlopen_test_mac ./dist/TsCore-mac.dylib
+          echo "--- native dlopen test (lazy: TsEnsureInit) ---"
+          cp dist/TsCore-mac.dylib dist/TsCore-mac-lazy.dylib
+          python3 cmd/tscore/tools/stripinits.py dist/TsCore-mac-lazy.dylib 2>/dev/null || true
+          run_watchdog 60 mac-lazy.log ./dist/dlopen_test_mac ./dist/TsCore-mac-lazy.dylib --lazy
 
       - name: Boot iOS simulator
         run: |
