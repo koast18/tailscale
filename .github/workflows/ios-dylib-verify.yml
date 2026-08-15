@@ -1,0 +1,227 @@
+# iOS dylib dlopen verification.
+#
+# The deliverable is a Go (c-archive -> clang dylib) Tailscale core that must
+# dlopen on iOS and whose exported Ts* functions must be callable. Go's
+# c-archive constructor (_rt0_arm64_ios_lib) spawns the runtime init thread
+# with pthread_create; on iOS, dlopen runs constructors while holding dyld's
+# internal lock, so that pthread_create can deadlock. This workflow therefore
+# verifies two variants on REAL Apple runtimes:
+#
+#   plain — constructor intact (dyld starts the Go runtime at dlopen)
+#   lazy  — initializer section stripped (cmd/tscore/tools/stripinits.py);
+#           the host calls TsEnsureInit() after dlopen
+#
+# Tests:
+#   1. macOS control: native dlopen of both variants + exported calls. Fast
+#      signal that the runtime/lazy machinery works end to end.
+#   2. iOS Simulator: same test inside a booted iPhone simulator (real iOS
+#      dyld/libSystem), via `xcrun simctl spawn`.
+#
+# Physical-device (iOS 18.6.2) validation still has to be done by the user,
+# but the simulator test exercises the exact dlopen + exported-call path on
+# Apple's iOS runtime and reproduces/refutes the ctor deadlock.
+name: iOS dylib dlopen verification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Recon
+        run: |
+          set -x
+          uname -m
+          sw_vers
+          xcodebuild -version
+          go version
+          python3 --version
+          xcrun simctl list runtimes available | head -10 || true
+          xcrun simctl list devices available | grep -i iphone | head -5 || true
+
+      - name: Apply in-repo patches
+        run: |
+          set -euxo pipefail
+          # Only top-level patches apply to this tree; toolchain patches live
+          # in patches/toolchain/ and are applied to the Go toolchain source.
+          for p in cmd/tscore/patches/*.patch; do
+            echo "Applying $p"
+            git apply "$p"
+          done
+
+      # ------------------------------------------------------------------
+      # macOS control (native dlopen) — validates runtime + lazy machinery
+      # ------------------------------------------------------------------
+      - name: Build macOS control dylibs
+        run: |
+          set -euxo pipefail
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mmacosx-version-min=13.0"
+          mkdir -p dist
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+          CC="${CC}" \
+          CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mmacosx-version-min=13.0" \
+          CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mmacosx-version-min=13.0" \
+          go build -buildmode=c-archive -trimpath -ldflags "-s -w" \
+            -o dist/core-darwin.a ./cmd/tscore
+          clang -dynamiclib -arch arm64 -isysroot "${SDK}" -mmacosx-version-min=13.0 \
+            -Wl,-all_load -Wl,-ObjC dist/core-darwin.a \
+            -framework Foundation -framework Security -framework CoreFoundation \
+            -o dist/TsCore-mac-plain.dylib
+          cp dist/TsCore-mac-plain.dylib dist/TsCore-mac-lazy.dylib
+          python3 cmd/tscore/tools/stripinits.py dist/TsCore-mac-lazy.dylib
+          codesign -s - --force dist/TsCore-mac-plain.dylib
+          codesign -s - --force dist/TsCore-mac-lazy.dylib
+          echo "--- plain init sections ---"
+          otool -l dist/TsCore-mac-plain.dylib | grep -E "__init_offsets|__mod_init_func" || true
+          echo "--- lazy init sections (must be gone) ---"
+          otool -l dist/TsCore-mac-lazy.dylib | grep -E "__init_offsets|__mod_init_func" || echo "(no init sections in lazy: OK)"
+          echo "--- lazy exported symbols ---"
+          nm -gU dist/TsCore-mac-lazy.dylib | grep -E "TsEnsureInit|_rt0_arm64|wait_runtime_init_done" || true
+
+      - name: Build macOS host test
+        run: |
+          set -euxo pipefail
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          clang -arch arm64 -isysroot "${SDK}" -mmacosx-version-min=13.0 \
+            -o dist/dlopen_test_mac cmd/tscore/tools/dlopen_test.c
+          codesign -s - --force dist/dlopen_test_mac
+
+      - name: Run macOS dlopen tests
+        run: |
+          set -uxo pipefail
+          run_watchdog() {
+            local secs="$1"; shift
+            local out="$1"; shift
+            "$@" >"$out" 2>&1 &
+            local pid=$!
+            ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) &
+            local killer=$!
+            wait "$pid"
+            local rc=$?
+            kill "$killer" 2>/dev/null || true
+            cat "$out"
+            return $rc
+          }
+          echo "===== macOS PLAIN variant (ctor starts runtime at dlopen) ====="
+          run_watchdog 120 mac-plain.log ./dist/dlopen_test_mac ./dist/TsCore-mac-plain.dylib || echo "RC=$? (non-zero)"
+          echo "===== macOS LAZY variant (TsEnsureInit) ====="
+          run_watchdog 120 mac-lazy.log ./dist/dlopen_test_mac ./dist/TsCore-mac-lazy.dylib --lazy || echo "RC=$? (non-zero)"
+          echo "===== boot traces ====="
+          cat /tmp/tscore-boot.log 2>/dev/null || echo "(no boot log)"
+          grep -h "TEST-PASS" mac-plain.log mac-lazy.log
+
+      # ------------------------------------------------------------------
+      # iOS Simulator — real iOS dyld/libSystem dlopen test
+      # ------------------------------------------------------------------
+      - name: Build simulator dylibs
+        run: |
+          set -euxo pipefail
+          SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0"
+          mkdir -p dist
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
+          CC="${CC}" \
+          CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
+          CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
+          go build -buildmode=c-archive -trimpath -ldflags "-s -w" \
+            -o dist/core-sim.a ./cmd/tscore
+          clang -dynamiclib -arch arm64 -isysroot "${SDK}" -mios-simulator-version-min=15.0 \
+            -Wl,-all_load -Wl,-ObjC dist/core-sim.a \
+            -framework Foundation -framework Security -framework CoreFoundation \
+            -o dist/TsCore-sim-plain.dylib
+          cp dist/TsCore-sim-plain.dylib dist/TsCore-sim-lazy.dylib
+          python3 cmd/tscore/tools/stripinits.py dist/TsCore-sim-lazy.dylib
+          codesign -s - --force dist/TsCore-sim-plain.dylib
+          codesign -s - --force dist/TsCore-sim-lazy.dylib
+          echo "--- sim lazy init sections (must be gone) ---"
+          otool -l dist/TsCore-sim-lazy.dylib | grep -E "__init_offsets|__mod_init_func" || echo "(no init sections in lazy: OK)"
+          echo "--- file ---"
+          file dist/TsCore-sim-plain.dylib dist/TsCore-sim-lazy.dylib
+          echo "--- lazy exported symbols ---"
+          nm -gU dist/TsCore-sim-lazy.dylib | grep -E "TsEnsureInit|_rt0_arm64_ios_lib|wait_runtime_init_done" || true
+
+      - name: Build simulator host test
+        run: |
+          set -euxo pipefail
+          SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          clang -arch arm64 -isysroot "${SDK}" -mios-simulator-version-min=15.0 \
+            -o dist/dlopen_test_sim cmd/tscore/tools/dlopen_test.c
+          codesign -s - --force dist/dlopen_test_sim
+          file dist/dlopen_test_sim
+
+      - name: Boot iOS simulator
+        run: |
+          set -euxo pipefail
+          UDID="$(python3 - <<'EOF'
+import json, subprocess
+out = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
+devs = [d for ds in out.get("devices", {}).values() for d in ds
+        if d.get("isAvailable") and d.get("name", "").startswith("iPhone")]
+print(devs[0]["udid"] if devs else "")
+EOF
+          )"
+          if [ -z "$UDID" ]; then
+            echo "no available iPhone device; creating one"
+            RUNTIME_ID="$(xcrun simctl list runtimes available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["runtimes"][0]["identifier"] if d["runtimes"] else "")')"
+            DEVICE_TYPE="$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; d=json.load(sys.stdin); t=[x for x in d["devicetypes"] if "iPhone" in x["name"]]; print(t[0]["identifier"] if t else "")')"
+            UDID="$(xcrun simctl create tscore-verify "$DEVICE_TYPE" "$RUNTIME_ID")"
+          fi
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl shutdown "$UDID" 2>/dev/null || true
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          echo "simulator booted: $UDID"
+
+      - name: Run simulator dlopen tests
+        run: |
+          set -uxo pipefail
+          SIMDATA="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data"
+          mkdir -p "$SIMDATA/tmp" "$SIMDATA/tmp/Documents"
+          cp dist/TsCore-sim-plain.dylib dist/TsCore-sim-lazy.dylib dist/dlopen_test_sim "$SIMDATA/tmp/"
+          run_watchdog() {
+            local secs="$1"; shift
+            local out="$1"; shift
+            "$@" >"$out" 2>&1 &
+            local pid=$!
+            ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) &
+            local killer=$!
+            wait "$pid"
+            local rc=$?
+            kill "$killer" 2>/dev/null || true
+            cat "$out"
+            return $rc
+          }
+          echo "===== iOS Simulator PLAIN variant (ctor runs under dyld lock) ====="
+          run_watchdog 180 sim-plain.log env SIMCTL_CHILD_LC_HOME_PATH=/tmp xcrun simctl spawn "$UDID" /tmp/dlopen_test_sim /tmp/TsCore-sim-plain.dylib || echo "RC=$? (non-zero; expected if ctor pthread_create deadlocks under dlopen)"
+          echo "===== iOS Simulator LAZY variant (TsEnsureInit after dlopen) ====="
+          run_watchdog 180 sim-lazy.log env SIMCTL_CHILD_LC_HOME_PATH=/tmp xcrun simctl spawn "$UDID" /tmp/dlopen_test_sim /tmp/TsCore-sim-lazy.dylib --lazy || echo "RC=$? (non-zero)"
+          echo "===== boot trace inside simulator ====="
+          cat "$SIMDATA/tmp/tscore-boot.log" 2>/dev/null || true
+          cat "$SIMDATA/tmp/Documents/tscore-boot.log" 2>/dev/null || echo "(no boot log found)"
+          echo "===== results ====="
+          grep -h "TEST-PASS" sim-plain.log sim-lazy.log 2>/dev/null || echo "NO TEST-PASS FOUND"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dylib-verify
+          path: |
+            dist/TsCore-*
+            mac-*.log
+            sim-*.log
+            /tmp/tscore-boot.log
+          if-no-files-found: ignore

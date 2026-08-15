@@ -45,9 +45,32 @@ clang -dynamiclib -arch arm64 -isysroot "$SDK" -mios-version-min=15.0 \
 # (A12+) run arm64 binaries natively via dyld compatible-slice execution.
 ```
 
-Artifacts: `libTailscaleCore.dylib` + auto-generated `libTailscaleCore.h`.
+Artifacts: `libTailscaleCore.dylib` (ctor auto-starts the Go runtime at
+dlopen) + `libTailscaleCore-lazy.dylib` (initializer stripped; host calls
+`TsEnsureInit()` after dlopen) + auto-generated `libTailscaleCore.h`.
 No code signing is done here — sign adhoc (`codesign -s -`) or let the
 sideload tool (e.g. LiveContainer's ZSign with your p12) sign on device.
+
+## Why two variants? (lazy-init vs ctor)
+
+Go's `-buildmode=c-archive` registers a load-time constructor
+(`_rt0_arm64_ios_lib`) that starts the Go runtime on a NEW thread via
+`pthread_create`. On iOS, `dlopen` runs constructors while holding dyld's
+internal lock, and `pthread_create` from inside that constructor can
+**deadlock** — observed on-device (iOS 18.6.2, LiveContainer): the app hangs
+at dlopen (black screen) while the runtime init thread never starts.
+
+The **lazy variant** removes the initializer section from the final dylib
+(`cmd/tscore/tools/stripinits.py`): dyld performs NO constructor at dlopen,
+the dylib maps instantly, and the host starts the runtime by calling
+`TsEnsureInit()` once, right after `dlopen` returns (no dyld lock held).
+`TsEnsureInit` blocks until Go runtime + package init completes. This is the
+recommended variant; the ctor variant is kept for comparison and for hosts
+that cannot call `TsEnsureInit`.
+
+Verification: `.github/workflows/ios-dylib-verify.yml` builds both variants
+and runs a real `dlopen` + exported-call test on a booted iOS Simulator (and
+a native macOS control) on GitHub Actions.
 
 ## Verify
 
@@ -62,6 +85,11 @@ otool -L libTailscaleCore.dylib                   # iOS system libs only
 
 ```objc
 #import "libTailscaleCore.h"
+
+void *h = dlopen(".../libTailscaleCore-lazy.dylib", RTLD_NOW);
+// lazy variant: start the Go runtime now (blocking until init done).
+// With the ctor variant this is a no-op-safe fallback.
+TsEnsureInit();
 
 TsInit(stateDirPath, "myNode");
 TsSetLogCallback(myLog);          // optional

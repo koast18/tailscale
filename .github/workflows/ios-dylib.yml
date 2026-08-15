@@ -138,6 +138,31 @@ jobs:
             -framework CoreFoundation \
             -o dist/libTailscaleCore.dylib
 
+      - name: Build lazy-init variant (no ctor; host calls TsEnsureInit)
+        if: env.SKIP_BUILD != '1'
+        run: |
+          set -euxo pipefail
+          # Same archive, but the final dylib has its initializer section
+          # stripped (cmd/tscore/tools/stripinits.py): dyld performs NO
+          # constructor at dlopen (avoids the pthread_create-under-dyld-lock
+          # deadlock on iOS), and the host starts the Go runtime by calling
+          # TsEnsureInit() once, right after dlopen returns.
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          clang -dynamiclib \
+            -arch arm64 -isysroot "${SDK}" -mios-version-min=15.0 \
+            -Wl,-all_load -Wl,-ObjC \
+            dist/libTailscaleCore-arm64.a \
+            -framework Foundation \
+            -framework Security \
+            -framework CoreFoundation \
+            -o dist/libTailscaleCore-lazy.dylib
+          python3 cmd/tscore/tools/stripinits.py dist/libTailscaleCore-lazy.dylib
+          codesign -s - --force dist/libTailscaleCore-lazy.dylib
+          echo "--- lazy init sections (must be gone) ---"
+          otool -l dist/libTailscaleCore-lazy.dylib | grep -E "__init_offsets|__mod_init_func" || echo "(no init sections: OK)"
+          echo "--- lazy exported symbols ---"
+          nm -gU dist/libTailscaleCore-lazy.dylib | grep -E "TsEnsureInit|_rt0_arm64_ios_lib|wait_runtime_init_done" || true
+
       - name: Finalize dylib + header
         if: env.SKIP_BUILD != '1'
         run: |
@@ -239,6 +264,7 @@ jobs:
           TsWaitingFiles
           TsWhoIs
           TsCurrentUser
+          TsEnsureInit
           EOF
           sort /tmp/expected.txt -o /tmp/expected.txt
           nm -gU dist/libTailscaleCore.dylib \
@@ -300,6 +326,7 @@ jobs:
           name: libTailscaleCore-ios
           path: |
             dist/libTailscaleCore.dylib
+            dist/libTailscaleCore-lazy.dylib
             dist/libTailscaleCore.h
           if-no-files-found: error
 
@@ -322,12 +349,13 @@ jobs:
           fi
           NOTES="Automated build of the Tailscale core dylib for iOS sideloading."
           NOTES="${NOTES}
-          - libTailscaleCore.dylib: arm64 Mach-O dylib (Go c-archive -> clang dynamiclib), iOS 15+
+          - libTailscaleCore.dylib: arm64 Mach-O dylib (Go c-archive -> clang dynamiclib), iOS 15+; ctor auto-starts Go runtime at dlopen
+          - libTailscaleCore-lazy.dylib: same, but initializer stripped - host calls TsEnsureInit() right after dlopen (recommended: avoids ctor-time pthread_create deadlock under iOS dlopen)
           - libTailscaleCore.h: generated C header (all Ts* exports)
 
           See cmd/tscore/README.md for integration details."
           gh release create "$TAG" \
-            dist/libTailscaleCore.dylib dist/libTailscaleCore.h \
+            dist/libTailscaleCore.dylib dist/libTailscaleCore-lazy.dylib dist/libTailscaleCore.h \
             --repo "$GITHUB_REPOSITORY" \
             --title "Tailscale Core dylib $TAG" \
             --notes "$NOTES"

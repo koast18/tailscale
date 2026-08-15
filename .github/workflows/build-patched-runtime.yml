@@ -1,6 +1,6 @@
 # Builds libTailscaleCore.dylib with a Go runtime patched for startup tracing
-# (cmd/tscore/patches/go-runtime-init-trace.patch). The patched runtime logs
-# initialization phases to /tmp/tscore-init.log and
+# (cmd/tscore/patches/toolchain/go-runtime-init-trace.patch). The patched runtime
+# logs initialization phases to /tmp/tscore-init.log and
 # <LC_HOME_PATH>/Documents/tscore-init.log so the iOS dlopen hang can be
 # attributed to a specific runtime phase. Purely diagnostic: it does not
 # change runtime behavior or constructor semantics (no synchronous init).
@@ -32,7 +32,7 @@ jobs:
           tar -C /tmp -xzf /tmp/go.src.tar.gz
           cd /tmp/go
           git init -q
-          git apply "$GITHUB_WORKSPACE/cmd/tscore/patches/go-runtime-init-trace.patch"
+          git apply "$GITHUB_WORKSPACE/cmd/tscore/patches/toolchain/go-runtime-init-trace.patch"
           echo "=== patch applied ==="
 
       - name: Build patched Go toolchain

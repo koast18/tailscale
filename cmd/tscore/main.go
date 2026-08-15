@@ -33,8 +33,10 @@ package main
 // running constructors during dlopen, and pthread_create from inside a
 // constructor deadlocks (Go's own lib entry defers init to a new thread for the
 // same reason, but that too is a hazard under iOS dlopen).
+static volatile int ts_ctor_ran = 0;
 __attribute__((constructor))
 static void tscore_ctor_trace(void) {
+    ts_ctor_ran = 1;
     const char *home = getenv("LC_HOME_PATH");
     char p[1024];
     if (home && *home) {
@@ -47,6 +49,81 @@ static void tscore_ctor_trace(void) {
         fprintf(f, "%lld ctor: dyld entering tscore constructors (thread %p)\n", (long long)time(NULL), (void*)pthread_self());
         fclose(f);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Lazy Go-runtime init ("lazy variant")
+//
+// Go's c-archive constructor (_rt0_arm64_ios_lib) starts the Go runtime on a
+// NEW thread via pthread_create. Under iOS, dlopen runs constructors while
+// holding dyld's internal lock, so pthread_create from inside the constructor
+// deadlocks. The lazy variant therefore REMOVES the initializer section from
+// the final dylib (cmd/tscore/tools/stripinits.py): dyld then performs no
+// initialization at dlopen, and the host calls TsEnsureInit() once, right
+// after dlopen returns, to start the runtime at a safe time (no dyld lock).
+// TsEnsureInit blocks until Go runtime + package initialization completes.
+// ---------------------------------------------------------------------------
+#if defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__) || defined(__ENVIRONMENT_IPHONE_SIMULATOR_VERSION_MIN_REQUIRED__)
+extern void _rt0_arm64_ios_lib(int argc, char **argv);
+#define TS_RT0_ENTRY _rt0_arm64_ios_lib
+#else
+extern void _rt0_arm64_darwin_lib(int argc, char **argv);
+#define TS_RT0_ENTRY _rt0_arm64_darwin_lib
+#endif
+extern uintptr_t _cgo_wait_runtime_init_done(void);
+extern char **environ;
+
+static pthread_once_t ts_go_init_once = PTHREAD_ONCE_INIT;
+
+// ts_bootlog appends a line to the sandbox-visible boot trace (C side, safe
+// before the Go runtime exists).
+static void ts_bootlog(const char *msg) {
+    const char *home = getenv("LC_HOME_PATH");
+    char p[1024];
+    if (home && *home) {
+        snprintf(p, sizeof p, "%s/Documents/tscore-boot.log", home);
+    } else {
+        snprintf(p, sizeof p, "/tmp/tscore-boot.log");
+    }
+    FILE *f = fopen(p, "a");
+    if (f) {
+        fprintf(f, "%lld %s\n", (long long)time(NULL), msg);
+        fclose(f);
+    }
+}
+
+// ts_go_init starts the Go runtime via the c-archive lib entry and waits until
+// initialization (package inits included) is complete. The argv/envp layout is
+// built exactly like the initial process stack because the Go runtime reads
+// env/executablePath from it on darwin (sysargs/goenvs_unix).
+static void ts_go_init(void) {
+    if (ts_ctor_ran) {
+        // Variant WITH initializer section: the ctor already started the
+        // runtime; just wait for it to finish.
+        _cgo_wait_runtime_init_done();
+        return;
+    }
+    int envc = 0;
+    while (environ && environ[envc]) envc++;
+    int total = 2 + envc + 3; // argv0, NULL, envp..., NULL, exe_path, NULL
+    char **args = (char **)calloc(total, sizeof(char *));
+    if (!args) return;
+    args[0] = (char *)"tscore";
+    for (int i = 0; i < envc; i++) args[2 + i] = environ[i];
+    args[2 + envc] = NULL;
+    args[3 + envc] = (char *)"executable_path=/tscore";
+    ts_bootlog("lazy-init: starting Go runtime");
+    TS_RT0_ENTRY(1, args);
+    // Block until main_init_done is closed and _cgo_notify_runtime_init_done
+    // is broadcast. Safe here: dlopen has returned, threads are allowed.
+    _cgo_wait_runtime_init_done();
+    ts_bootlog("lazy-init: Go runtime ready");
+}
+
+// Start the Go runtime on first use. The host MUST call this once, right
+// after dlopen, before any other Ts* function (lazy variant only).
+void TsEnsureInit(void) {
+    pthread_once(&ts_go_init_once, ts_go_init);
 }
 
 
