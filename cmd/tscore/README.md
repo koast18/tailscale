@@ -40,9 +40,9 @@ clang -dynamiclib -arch arm64 -isysroot "$SDK" -mios-version-min=15.0 \
   -framework Foundation -framework Security -framework CoreFoundation \
   -o libTailscaleCore-arm64.dylib
 
-# arm64e slice: repeat steps with GOARCH=arm64e / -arch arm64e, then merge:
-lipo -create libTailscaleCore-arm64.dylib libTailscaleCore-arm64e.dylib \
-  -output libTailscaleCore.dylib
+# arm64e: the official Go toolchain has no ios/arm64e target (Go 1.26.x
+# included), so the deliverable is a single arm64 slice. arm64e devices
+# (A12+) run arm64 binaries natively via dyld compatible-slice execution.
 ```
 
 Artifacts: `libTailscaleCore.dylib` + auto-generated `libTailscaleCore.h`.
