@@ -53,6 +53,18 @@ jobs:
         if: env.SKIP_BUILD != '1'
         uses: actions/checkout@v4
 
+      - name: Apply upstream patches
+        if: env.SKIP_BUILD != '1'
+        run: |
+          set -euxo pipefail
+          for p in cmd/tscore/patches/*.patch; do
+            echo "Applying $p"
+            git apply "$p"
+          done
+        # Patches touch tailscale upstream sources (e.g. magicsock
+        # debugknobs) without committing modifications; they are applied
+        # here so the Go build below uses the patched tree.
+
       - name: Set up Go
         if: env.SKIP_BUILD != '1'
         uses: actions/setup-go@v5
@@ -61,6 +73,17 @@ jobs:
           # auto-downloads the toolchain if needed.
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: go vet (patched tree)
+        if: env.SKIP_BUILD != '1'
+        run: |
+          set -euxo pipefail
+          go vet ./cmd/tscore ./wgengine/magicsock
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
+          CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
+          CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
+          go vet ./cmd/tscore
 
       - name: Build arm64
         if: env.SKIP_BUILD != '1'
@@ -79,11 +102,13 @@ jobs:
           # target at all, so the deliverable is a single arm64 slice.
           # arm64e devices (A12+) run arm64 binaries natively via dyld's
           # compatible-slice execution.
+          # Version stamping: TsVersion() reports the closest tag describe.
+          VERSION_FLAGS="-s -w -X main.coreVersion=$(git describe --tags --always 2>/dev/null || echo manual)"
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
           CC="${CC}" \
           CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
           CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
-          go build -buildmode=c-archive -trimpath -ldflags "-s -w" \
+          go build -buildmode=c-archive -trimpath -ldflags "${VERSION_FLAGS}" \
             -o dist/libTailscaleCore-arm64.a ./cmd/tscore
 
       - name: Link arm64 dylib from archive
@@ -127,7 +152,9 @@ jobs:
           TsDeleteWaitingFile
           TsFileTargets
           TsFreeString
+          TsGetDerpOnly
           TsGetExitNodeStatus
+          TsGetHttpProxy
           TsGetPrefsJSON
           TsGetWaitingFile
           TsInit
@@ -140,6 +167,7 @@ jobs:
           TsNetcheck
           TsPing
           TsPushFile
+          TsSetDerpOnly
           TsSetExitNode
           TsSetExitNodeAllowLANAccess
           TsSetHostname
@@ -157,8 +185,10 @@ jobs:
           TsStopLocalHTTPProxy
           TsSuggestExitNode
           TsTailscaleIPs
+          TsVersion
           TsWaitingFiles
           TsWhoIs
+          TsCurrentUser
           EOF
           sort /tmp/expected.txt -o /tmp/expected.txt
           nm -gU dist/libTailscaleCore.dylib \

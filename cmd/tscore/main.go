@@ -50,6 +50,10 @@ const (
 	stateError      = 3
 )
 
+// coreVersion is stamped at build time via
+// -ldflags "-X main.coreVersion=$(git describe --tags --always ...)".
+var coreVersion = "dev"
+
 var (
 	mu sync.Mutex // guards all globals below
 
@@ -142,6 +146,10 @@ func TsInit(dir *C.char, hn *C.char) C.int {
 	}
 	srv = s
 	tslogf("TsInit: dir=%s hostname=%q", d, h)
+
+	// Restore the persisted derp-only flag (set via TsSetDerpOnly) so it
+	// survives app restarts.
+	restoreDerpOnly()
 	return 0
 }
 
@@ -379,6 +387,19 @@ func TsFreeString(p *C.char) {
 	if p != nil {
 		C.free(unsafe.Pointer(p))
 	}
+}
+
+//export TsVersion
+func TsVersion() *C.char {
+	return C.CString(coreVersion)
+}
+
+// export TsGetHttpProxy returns the current HTTPS_PROXY value set by
+// TsSetHttpProxy (possibly empty). Read-only, no side effects.
+//
+//export TsGetHttpProxy
+func TsGetHttpProxy() *C.char {
+	return C.CString(os.Getenv("HTTPS_PROXY"))
 }
 
 //export TsSetLogCallback

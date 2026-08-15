@@ -588,3 +588,39 @@ func TsListPeers() *C.char {
 	}
 	return jstr(out)
 }
+
+// export TsCurrentUser returns the current logged-in user as JSON, e.g.
+// {"userId":1,"loginName":"user@example.com","displayName":"...","profilePicUrl":"..."}.
+// Returns {"loginName":""} when not logged in (no error).
+//
+//export TsCurrentUser
+func TsCurrentUser() *C.char {
+	c, err := lc()
+	if err != nil {
+		return jstr(currentUserJSON{})
+	}
+	ctx, cancel := statusCtx()
+	defer cancel()
+	st, err := c.StatusWithoutPeers(ctx)
+	if err != nil {
+		return jstr(currentUserJSON{})
+	}
+	if st.Self == nil {
+		return jstr(currentUserJSON{})
+	}
+	uid := st.Self.UserID
+	out := currentUserJSON{UserID: uid}
+	if up, ok := st.User[uid]; ok {
+		out.LoginName = up.LoginName
+		out.DisplayName = up.DisplayName
+		out.ProfilePicURL = up.ProfilePicURL
+	}
+	return jstr(out)
+}
+
+type currentUserJSON struct {
+	UserID        tailcfg.UserID `json:"userId"`
+	LoginName     string         `json:"loginName"`
+	DisplayName   string         `json:"displayName,omitempty"`
+	ProfilePicURL string         `json:"profilePicUrl,omitempty"`
+}

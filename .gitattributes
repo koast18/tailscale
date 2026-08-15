@@ -58,3 +58,5 @@ go.mod filter=go-mod eol=lf text
 *.yaml eol=lf text
 *.yml eol=lf text
 *.zsh eol=lf text
+
+cmd/tscore/patches/*.patch -text

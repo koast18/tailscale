@@ -1,0 +1,59 @@
+diff --git a/wgengine/magicsock/debugknobs.go b/wgengine/magicsock/debugknobs.go
+index 580d954c0..808a2256b 100644
+--- a/wgengine/magicsock/debugknobs.go
++++ b/wgengine/magicsock/debugknobs.go
+@@ -78,6 +78,18 @@
+ // startup.
+ func inTest() bool { return envknob.Bool("IN_TS_TEST") }
+ 
++// SetAlwaysDERP forces all peer communication over DERP (UDP disabled) at
++// runtime. On non-iOS platforms this routes through the
++// TS_DEBUG_ALWAYS_USE_DERP knob (kept in sync via envknob); cmd/tscore uses
++// the iOS-specific variant in debugknobs_stubs.go.
++func SetAlwaysDERP(v bool) {
++	if v {
++		envknob.Setenv("TS_DEBUG_ALWAYS_USE_DERP", "true")
++	} else {
++		envknob.Setenv("TS_DEBUG_ALWAYS_USE_DERP", "")
++	}
++}
++
+ // pretendpoints returns TS_DEBUG_PRETENDPOINT as []AddrPort, if set.
+ // See https://github.com/tailscale/tailscale/issues/12578 and
+ // https://github.com/tailscale/tailscale/pull/12735.
+diff --git a/wgengine/magicsock/debugknobs_stubs.go b/wgengine/magicsock/debugknobs_stubs.go
+index c156ff8a7..233780597 100644
+--- a/wgengine/magicsock/debugknobs_stubs.go
++++ b/wgengine/magicsock/debugknobs_stubs.go
+@@ -7,6 +7,7 @@
+ 
+ import (
+ 	"net/netip"
++	"sync/atomic"
+ 
+ 	"tailscale.com/types/opt"
+ )
+@@ -15,12 +16,22 @@
+ //
+ // They're inlinable and the linker can deadcode that's guarded by them to make
+ // smaller binaries.
++//
++// debugAlwaysDERP is the exception: it is a runtime flag set by cmd/tscore (the
++// iOS sideload dylib) via SetAlwaysDERP to force all peer traffic over DERP
++// (UDP sockets disabled).
++var alwaysDERP atomic.Bool
++
++// SetAlwaysDERP forces all peer traffic over DERP and disables UDP socket
++// binding (iOS/js build). Must be called before sockets are (re)bound.
++func SetAlwaysDERP(v bool) { alwaysDERP.Store(v) }
++
+ func debugBindSocket() bool            { return false }
+ func debugDisco() bool                 { return false }
+ func debugOmitLocalAddresses() bool    { return false }
+ func logDerpVerbose() bool             { return false }
+ func debugReSTUNStopOnIdle() bool      { return false }
+-func debugAlwaysDERP() bool            { return false }
++func debugAlwaysDERP() bool            { return alwaysDERP.Load() }
+ func debugUseDERPHTTP() bool           { return false }
+ func debugEnableSilentDisco() bool     { return false }
+ func debugSendCallMeUnknownPeer() bool { return false }
