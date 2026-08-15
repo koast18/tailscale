@@ -1,8 +1,49 @@
+diff --git a/src/runtime/os_darwin.go b/src/runtime/os_darwin.go
+index 79cd299..6decae9 100644
+--- a/src/runtime/os_darwin.go
++++ b/src/runtime/os_darwin.go
+@@ -148,6 +148,7 @@ func sigNoteSleep(*note) {
+ func osinit() {
+ 	// pthread_create delayed until end of goenvs so that we
+ 	// can look at the environment first.
++	tsInitTrace("osinit")
+ 
+ 	numCPUStartup = getCPUCount()
+ 	physPageSize = getPageSize()
+diff --git a/src/runtime/proc.go b/src/runtime/proc.go
+index 005c875..9e23145 100644
+--- a/src/runtime/proc.go
++++ b/src/runtime/proc.go
+@@ -147,6 +147,7 @@ var initSigmask sigset
+ 
+ // The main goroutine.
+ func main() {
++	tsInitTrace("main-enter")
+ 	mp := getg().m
+ 
+ 	// Racectx of m0->g0 is used only as the parent of the main goroutine.
+@@ -265,6 +266,7 @@ func main() {
+ 	// of collecting statistics in malloc and newproc
+ 	inittrace.active = false
+ 
++	tsInitTrace("main-init-done")
+ 	close(main_init_done)
+ 
+ 	needUnlock = false
+@@ -829,6 +831,7 @@ func getGodebugEarly() (string, bool) {
+ //
+ // The new G calls runtime·main.
+ func schedinit() {
++	tsInitTrace("schedinit")
+ 	lockInit(&sched.lock, lockRankSched)
+ 	lockInit(&sched.sysmonlock, lockRankSysmon)
+ 	lockInit(&sched.deferlock, lockRankDefer)
 diff --git a/src/runtime/tsinittrace.go b/src/runtime/tsinittrace.go
 new file mode 100644
+index 0000000..e0d7e3e
 --- /dev/null
 +++ b/src/runtime/tsinittrace.go
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,62 @@
 +//go:build darwin
 +
 +package runtime
@@ -60,36 +101,8 @@ new file mode 100644
 +	write1(uintptr(*fd), unsafe.Pointer(&buf[0]), int32(len(buf)))
 +}
 +
-+// rawBytes returns the address of s's data as a NUL-terminated byte slice.
-+// The caller must ensure s contains a trailing '\x00' and fits in a stack
-+// buffer; used only with compile-time constants above.
++// rawBytes exposes the data of a compile-time string constant (with its
++// trailing NUL) as a byte slice.
 +func rawBytes(s string) []byte {
 +	return unsafe.Slice(unsafe.StringData(s), len(s))
 +}
-diff --git a/src/runtime/os_darwin.go b/src/runtime/os_darwin.go
---- a/src/runtime/os_darwin.go
-+++ b/src/runtime/os_darwin.go
-@@ -148,6 +148,8 @@ func osinit() {
- 	// pthread_create delayed until end of goenvs so that we
- 	// can look at the environment first.
-+	tsInitTrace("osinit")
- 
- 	numCPUStartup = getCPUCount()
-diff --git a/src/runtime/proc.go b/src/runtime/proc.go
---- a/src/runtime/proc.go
-+++ b/src/runtime/proc.go
-@@ -829,6 +829,8 @@ func schedinit() {
- 	lockInit(&sched.lock, lockRankSched)
-+	tsInitTrace("schedinit")
- 	lockInit(&sched.sysmonlock, lockRankSysmon)
-@@ -149,6 +149,7 @@ func main() {
- 	mp := getg().m
-+	tsInitTrace("main-enter")
- 
- 	// Racectx of m0->g0 is used only as the parent of the main goroutine.
-@@ -255,6 +255,7 @@ func main() {
- 	// of collecting statistics in malloc and newproc
- 	inittrace.active = false
- 
-+	tsInitTrace("main-init-done")
- 	close(main_init_done)

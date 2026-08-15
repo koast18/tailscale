@@ -31,7 +31,8 @@ jobs:
           curl -fsSL "https://go.dev/dl/go${GOTOOLCHAIN_VER}.src.tar.gz" -o /tmp/go.src.tar.gz
           tar -C /tmp -xzf /tmp/go.src.tar.gz
           cd /tmp/go
-          patch -p1 < "$GITHUB_WORKSPACE/cmd/tscore/patches/go-runtime-init-trace.patch"
+          git init -q
+          git apply "$GITHUB_WORKSPACE/cmd/tscore/patches/go-runtime-init-trace.patch"
           echo "=== patch applied ==="
 
       - name: Build patched Go toolchain
