@@ -102,8 +102,14 @@ jobs:
           # target at all, so the deliverable is a single arm64 slice.
           # arm64e devices (A12+) run arm64 binaries natively via dyld's
           # compatible-slice execution.
-          # Version stamping: TsVersion() reports the closest tag describe.
-          VERSION_FLAGS="-s -w -X main.coreVersion=$(git describe --tags --always 2>/dev/null || echo manual)"
+          # Version stamping: TsVersion() reports the upstream VERSION.txt
+          # (as of the checked-out commit) plus the commit hash, e.g.
+          # 1.103.0-gcae406380. VERSION.txt is the pristine upstream file;
+          # the patch only touches wgengine/magicsock debugknobs.
+          VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || true)"
+          [ -n "$VERSION" ] || VERSION="dev"
+          HASH="$(git rev-parse --short HEAD)"
+          VERSION_FLAGS="-s -w -X main.coreVersion=${VERSION}-g${HASH}"
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
           CC="${CC}" \
           CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
