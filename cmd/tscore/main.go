@@ -106,7 +106,10 @@ static void ts_go_init(void) {
 // Block until the Go runtime is initialized. The host should call this once,
 // right after dlopen, before other Ts* calls (with the ctor intact this is a
 // no-op-ish safety net; exported calls already wait internally).
-void TsEnsureInit(void) {
+//
+// NOTE: weak because cgo concatenates every file's C preamble and compiles it
+// into several objects; the linker merges the duplicate weak definitions.
+__attribute__((weak)) void TsEnsureInit(void) {
     pthread_once(&ts_go_init_once, ts_go_init);
 }
 
