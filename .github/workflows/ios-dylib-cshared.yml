@@ -187,72 +187,42 @@ jobs:
           xcrun simctl bootstatus "$UDID" -b
           echo "simulator booted: $UDID"
 
-      - name: Run simulator dlopen tests
+      - name: Run simulator dlopen tests (host app via simctl launch)
         run: |
           set -uxo pipefail
-          DYLIB=""
-          for cand in dist/TsCore-cshared-sim.dylib /tmp/probe/tscore-old.dylib /tmp/probe/tscore-cur.dylib; do
-            if [ -f "$cand" ]; then DYLIB="$cand"; break; fi
-          done
-          if [ -z "$DYLIB" ] || [ ! -f dist/dlopen_test_sim ]; then
-            echo "no c-shared dylib or host test found; skipping sim run"
-            exit 0
-          fi
+          DYLIB="dist/TsCore-cshared-sim.dylib"
+          if [ ! -f "$DYLIB" ]; then echo "no c-shared sim dylib; skipping"; exit 0; fi
           echo "using dylib: $DYLIB"
-          SIMDATA="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data"
-          echo "===== locate sim /tmp mapping ====="
-          xcrun simctl spawn "$UDID" /bin/sh -c 'echo TS_MARKER_$$ > /tmp/tscore-marker.txt; echo WROTE_TMP'
-          xcrun simctl spawn "$UDID" /bin/sh -c 'echo TS_MARKER_$$ > /var/tmp/tscore-marker2.txt; echo WROTE_VARTMP'
-          RUNTIME_ROOT="$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; r=json.load(sys.stdin)["runtimes"][0]; print(r.get("bundlePath",""))')/Contents/Resources/RuntimeRoot"
-          echo "RUNTIME_ROOT=$RUNTIME_ROOT"
-          M1=$(find "$SIMDATA" "$RUNTIME_ROOT" ~/Library/Developer/CoreSimulator -name 'tscore-marker.txt' -print -quit 2>/dev/null || true)
-          M2=$(find "$SIMDATA" "$RUNTIME_ROOT" ~/Library/Developer/CoreSimulator -name 'tscore-marker2.txt' -print -quit 2>/dev/null || true)
-          echo "marker1(/tmp) host path: $M1"
-          echo "marker2(/var/tmp) host path: $M2"
-          TMPDIR_HOST=""
-          if [ -n "$M1" ]; then TMPDIR_HOST="$(dirname "$M1")"; elif [ -n "$M2" ]; then TMPDIR_HOST="$(dirname "$M2")"; fi
-          echo "TMPDIR_HOST=$TMPDIR_HOST" >> "$GITHUB_ENV"
-          if [ -z "$TMPDIR_HOST" ]; then
-            echo "(could not map sim tmp; trying /private/var/folders scan)"
-            M3=$(find /private/var/folders -name 'tscore-marker.txt' -print -quit 2>/dev/null || true)
-            echo "marker1 in /private/var/folders: $M3"
-            if [ -n "$M3" ]; then TMPDIR_HOST="$(dirname "$M3")"; echo "TMPDIR_HOST=$TMPDIR_HOST" >> "$GITHUB_ENV"; fi
-          fi
-          if [ -z "$TMPDIR_HOST" ]; then echo "(could not map sim tmp; skipping sim tests)"; exit 0; fi
-          mkdir -p "$TMPDIR_HOST/Documents"
-          cp "$DYLIB" "$TMPDIR_HOST/TsCore-test.dylib"
-          cp dist/dlopen_test_sim "$TMPDIR_HOST/"
-          echo "copied test files to host-side sim tmp: $TMPDIR_HOST"
-          run_watchdog() {
-            local secs="$1"; shift
-            local out="$1"; shift
-            "$@" >"$out" 2>&1 &
-            local pid=$!
-            ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) &
-            local killer=$!
-            wait "$pid"
-            local rc=$?
-            kill "$killer" 2>/dev/null || true
-            cat "$out"
-            return $rc
-          }
-          echo "===== c-shared PLAIN variant (ctor under dlopen) ====="
-          for TMP in /tmp /var/tmp; do
-            TAG="$(echo "$TMP" | tr '/' '_')"
-            echo "--- plain via $TMP ---"
-            run_watchdog 180 "sim-plain$TAG.log" env SIMCTL_CHILD_LC_HOME_PATH="$TMP" xcrun simctl spawn "$UDID" /bin/sh -c "$TMP/dlopen_test_sim $TMP/TsCore-test.dylib" && { echo "PLAIN PASS on $TMP"; break; } || echo "RC=$? (non-zero)"
-          done
-          echo "===== c-shared LAZY variant (strip ctor + TsEnsureInit) ====="
-          if python3 cmd/tscore/tools/stripinits.py "$DYLIB" 2>/dev/null; then
-            for d in "$SIMDATA/tmp" "$SIMDATA/var/tmp"; do cp "$DYLIB" "$d/TsCore-test-lazy.dylib"; done
-            for TMP in /tmp /var/tmp; do
-              TAG="$(echo "$TMP" | tr '/' '_')"
-              echo "--- lazy via $TMP ---"
-              run_watchdog 180 "sim-lazy$TAG.log" env SIMCTL_CHILD_LC_HOME_PATH="$TMP" xcrun simctl spawn "$UDID" /bin/sh -c "$TMP/dlopen_test_sim $TMP/TsCore-test-lazy.dylib --lazy" && { echo "LAZY PASS on $TMP"; break; } || echo "RC=$? (non-zero)"
-            done
-          else
-            echo "stripinits failed; lazy variant skipped"
-          fi
+          # Assemble a real (minimal) app bundle for the simulator: the host
+          # app dlopens libTailscaleCore-lazy.dylib from its own bundle and
+          # prints every step (see cmd/tscore/hostapp/main.m). simctl handles
+          # installing the bundle into the simulator filesystem.
+          APP="dist/TsCoreVerify.app"
+          rm -rf "$APP"
+          mkdir -p "$APP"
+          SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          clang -arch arm64 -isysroot "${SDK}" -mios-simulator-version-min=15.0 -fobjc-arc \
+            cmd/tscore/hostapp/main.m \
+            -framework UIKit -framework Foundation \
+            -o "$APP/TsCoreVerify"
+          codesign -s - --force "$APP/TsCoreVerify"
+          cp cmd/tscore/hostapp/Info.plist "$APP/"
+          cp "$DYLIB" "$APP/libTailscaleCore-lazy.dylib"
+          file "$APP/TsCoreVerify" "$APP/libTailscaleCore-lazy.dylib"
+          xcrun simctl install "$UDID" "$APP" || { echo "simctl install failed"; exit 1; }
+          echo "installed; launching with console..."
+          # launch --console streams stdout/stderr; the app stays running after
+          # the test, so capture for a while then stop.
+          xcrun simctl launch --console "$UDID" dev.koast18.tscoreverify > sim-console.log 2>&1 &
+          LPID=$!
+          ( sleep 90; kill -9 "$LPID" 2>/dev/null ) &
+          KPID=$!
+          wait "$LPID"; RC=$?
+          kill "$KPID" 2>/dev/null || true
+          echo "=== simulator console output ==="
+          cat sim-console.log
+          echo "===== results ====="
+          grep -E "VERIFY-PASS|FAIL |TsVersion|TsInit|TsIsRunning|dlopen" sim-console.log | head -20
           echo "===== boot traces inside simulator ====="
           cat "$SIMDATA/tmp/tscore-boot.log" 2>/dev/null || true
           cat "$SIMDATA/tmp/Documents/tscore-boot.log" 2>/dev/null || echo "(no boot log found)"
