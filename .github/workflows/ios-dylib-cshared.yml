@@ -222,15 +222,17 @@ jobs:
           }
           echo "===== c-shared PLAIN variant (ctor under dlopen) ====="
           for TMP in /tmp /var/tmp; do
+            TAG="$(echo "$TMP" | tr '/' '_')"
             echo "--- plain via $TMP ---"
-            run_watchdog 180 sim-plain-$TMP.log env SIMCTL_CHILD_LC_HOME_PATH=$TMP xcrun simctl spawn "$UDID" $TMP/dlopen_test_sim $TMP/TsCore-test.dylib && { echo "PLAIN PASS on $TMP"; break; } || echo "RC=$? (non-zero)"
+            run_watchdog 180 "sim-plain$TAG.log" env SIMCTL_CHILD_LC_HOME_PATH="$TMP" xcrun simctl spawn "$UDID" /bin/sh -c "$TMP/dlopen_test_sim $TMP/TsCore-test.dylib" && { echo "PLAIN PASS on $TMP"; break; } || echo "RC=$? (non-zero)"
           done
           echo "===== c-shared LAZY variant (strip ctor + TsEnsureInit) ====="
           if python3 cmd/tscore/tools/stripinits.py "$DYLIB" 2>/dev/null; then
             for d in "$SIMDATA/tmp" "$SIMDATA/var/tmp"; do cp "$DYLIB" "$d/TsCore-test-lazy.dylib"; done
             for TMP in /tmp /var/tmp; do
+              TAG="$(echo "$TMP" | tr '/' '_')"
               echo "--- lazy via $TMP ---"
-              run_watchdog 180 sim-lazy-$TMP.log env SIMCTL_CHILD_LC_HOME_PATH=$TMP xcrun simctl spawn "$UDID" $TMP/dlopen_test_sim $TMP/TsCore-test-lazy.dylib --lazy && { echo "LAZY PASS on $TMP"; break; } || echo "RC=$? (non-zero)"
+              run_watchdog 180 "sim-lazy$TAG.log" env SIMCTL_CHILD_LC_HOME_PATH="$TMP" xcrun simctl spawn "$UDID" /bin/sh -c "$TMP/dlopen_test_sim $TMP/TsCore-test-lazy.dylib --lazy" && { echo "LAZY PASS on $TMP"; break; } || echo "RC=$? (non-zero)"
             done
           else
             echo "stripinits failed; lazy variant skipped"
