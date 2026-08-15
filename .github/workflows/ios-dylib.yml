@@ -214,10 +214,10 @@ jobs:
           fi
           NOTES="Automated build of the Tailscale core dylib for iOS sideloading."
           NOTES="${NOTES}
-- libTailscaleCore.dylib: arm64 Mach-O dylib (Go c-archive -> clang dynamiclib), iOS 15+
-- libTailscaleCore.h: generated C header (all Ts* exports)
+          - libTailscaleCore.dylib: arm64 Mach-O dylib (Go c-archive -> clang dynamiclib), iOS 15+
+          - libTailscaleCore.h: generated C header (all Ts* exports)
 
-See cmd/tscore/README.md for integration details."
+          See cmd/tscore/README.md for integration details."
           gh release create "$TAG" \
             dist/libTailscaleCore.dylib dist/libTailscaleCore.h \
             --repo "$GITHUB_REPOSITORY" \
