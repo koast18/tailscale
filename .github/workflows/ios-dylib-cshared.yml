@@ -203,7 +203,7 @@ jobs:
           SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
           clang -arch arm64 -isysroot "${SDK}" -mios-simulator-version-min=15.0 -fobjc-arc \
             cmd/tscore/hostapp/main.m \
-            -framework UIKit -framework Foundation \
+            -framework UIKit -framework Foundation -framework CoreGraphics \
             -o "$APP/TsCoreVerify"
           codesign -s - --force "$APP/TsCoreVerify"
           cp cmd/tscore/hostapp/Info.plist "$APP/"
