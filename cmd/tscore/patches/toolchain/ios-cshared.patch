@@ -1,0 +1,12 @@
+diff --git a/src/internal/platform/supported.go b/src/internal/platform/supported.go
+--- a/src/internal/platform/supported.go
++++ b/src/internal/platform/supported.go
+@@ -165,6 +165,8 @@ func BuildModeSupported(compiler, buildmode, goos, goarch string) bool {
+ 			"linux/amd64", "linux/arm", "linux/arm64", "linux/loong64", "linux/386", "linux/ppc64le", "linux/riscv64", "linux/s390x",
+ 			"android/amd64", "android/arm", "android/arm64", "android/386",
+ 			"freebsd/amd64",
+ 			"darwin/amd64", "darwin/arm64",
++			"ios/amd64", "ios/arm64",
+ 			"windows/amd64", "windows/386", "windows/arm64",
+ 			"wasip1/wasm":
+ 			return true

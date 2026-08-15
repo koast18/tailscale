@@ -1,0 +1,180 @@
+# iOS dylib via -buildmode=c-shared (patched Go toolchain).
+#
+# Go 1.26.6's c-archive for ios/arm64 no longer emits the _rt0_arm64_ios_lib
+# load-time initializer (DCE removes it), so a c-archive -> clang-dylib has
+# no constructor and cannot start the Go runtime. -buildmode=c-shared is the
+# supported dynamic-library path on darwin and keeps the ctor + the cgo
+# runtime hooks; ios/arm64 is only excluded from it by a 2-line check in
+# internal/platform (cmd/tscore/patches/toolchain/ios-cshared.patch).
+#
+# This workflow builds a patched Go toolchain, produces BOTH variants for the
+# iOS simulator and the device:
+#   plain - ctor intact (dyld starts the Go runtime at dlopen)
+#   lazy  - initializer stripped (cmd/tscore/tools/stripinits.py); the host
+#           calls TsEnsureInit() right after dlopen
+# and runs the dlopen + exported-call test on a booted iPhone simulator.
+name: iOS dylib c-shared experiment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cshared:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Apply in-repo patches
+        run: |
+          set -euxo pipefail
+          for p in cmd/tscore/patches/*.patch; do git apply "$p"; done
+
+      - name: Build patched Go toolchain (ios c-shared support)
+        run: |
+          set -euxo pipefail
+          GOTOOLCHAIN_VER="$(grep '^go ' go.mod | awk '{print $2}')"
+          echo "Patching Go $GOTOOLCHAIN_VER"
+          curl -fsSL "https://go.dev/dl/go${GOTOOLCHAIN_VER}.src.tar.gz" -o /tmp/go.src.tar.gz
+          tar -C /tmp -xzf /tmp/go.src.tar.gz
+          cd /tmp/go
+          git init -q
+          git apply "$GITHUB_WORKSPACE/cmd/tscore/patches/toolchain/ios-cshared.patch"
+          echo "=== patch applied ==="
+          cd /tmp/go/src
+          GOROOT_BOOTSTRAP="$(go env GOROOT)" ./make.bash
+          /tmp/go/bin/go version
+
+      - name: Build simulator c-shared dylibs
+        continue-on-error: true
+        run: |
+          set -uxo pipefail
+          export PATH="/tmp/go/bin:$PATH"
+          export GOTOOLCHAIN=local
+          SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0"
+          mkdir -p dist
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
+          CC="${CC}" \
+          CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
+          CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
+          go build -buildmode=c-shared -trimpath -ldflags "-s -w" \
+            -o dist/TsCore-cshared-sim.dylib ./cmd/tscore
+          echo "--- file ---"
+          file dist/TsCore-cshared-sim.dylib
+          echo "--- init sections ---"
+          otool -l dist/TsCore-cshared-sim.dylib | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(no init sections!)"
+          echo "--- key symbols ---"
+          nm -gU dist/TsCore-cshared-sim.dylib | grep -E "_rt0_arm64|cgo_wait|TsVersion|TsInit$|TsEnsureInit" | head -20
+          echo "--- Ts* count ---"
+          nm -gU dist/TsCore-cshared-sim.dylib | awk '{print $NF}' | sed 's/^_//' | grep -c '^Ts' || true
+          cp dist/TsCore-cshared-sim.dylib dist/TsCore-cshared-sim-lazy.dylib
+          python3 cmd/tscore/tools/stripinits.py dist/TsCore-cshared-sim-lazy.dylib
+          codesign -s - --force dist/TsCore-cshared-sim.dylib
+          codesign -s - --force dist/TsCore-cshared-sim-lazy.dylib
+
+      - name: Build device c-shared dylibs
+        continue-on-error: true
+        run: |
+          set -uxo pipefail
+          export PATH="/tmp/go/bin:$PATH"
+          export GOTOOLCHAIN=local
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mios-version-min=15.0"
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
+          CC="${CC}" \
+          CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
+          CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
+          go build -buildmode=c-shared -trimpath -ldflags "-s -w" \
+            -o dist/TsCore-cshared-device.dylib ./cmd/tscore
+          cp dist/TsCore-cshared-device.dylib dist/TsCore-cshared-device-lazy.dylib
+          python3 cmd/tscore/tools/stripinits.py dist/TsCore-cshared-device-lazy.dylib
+          codesign -s - --force dist/TsCore-cshared-device.dylib
+          codesign -s - --force dist/TsCore-cshared-device-lazy.dylib
+          file dist/TsCore-cshared-device.dylib dist/TsCore-cshared-device-lazy.dylib
+          echo "--- device init sections ---"
+          otool -l dist/TsCore-cshared-device.dylib | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(none)"
+          echo "--- device key symbols ---"
+          nm -gU dist/TsCore-cshared-device.dylib | grep -E "_rt0_arm64|cgo_wait" | head
+
+      - name: Build simulator host test
+        continue-on-error: true
+        run: |
+          set -euxo pipefail
+          SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          clang -arch arm64 -isysroot "${SDK}" -mios-simulator-version-min=15.0 \
+            -o dist/dlopen_test_sim cmd/tscore/tools/dlopen_test.c
+          codesign -s - --force dist/dlopen_test_sim
+
+      - name: Boot iOS simulator
+        run: |
+          set -euxo pipefail
+          UDID="$(python3 - <<'EOF'
+          import json, subprocess
+          out = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
+          devs = [d for ds in out.get("devices", {}).values() for d in ds if d.get("isAvailable") and d.get("name", "").startswith("iPhone")]
+          print(devs[0]["udid"] if devs else "")
+          EOF
+          )"
+          if [ -z "$UDID" ]; then
+            echo "no available iPhone device; creating one"
+            RUNTIME_ID="$(xcrun simctl list runtimes available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["runtimes"][0]["identifier"] if d["runtimes"] else "")')"
+            DEVICE_TYPE="$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; d=json.load(sys.stdin); t=[x for x in d["devicetypes"] if "iPhone" in x["name"]]; print(t[0]["identifier"] if t else "")')"
+            UDID="$(xcrun simctl create tscore-verify "$DEVICE_TYPE" "$RUNTIME_ID")"
+          fi
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl shutdown "$UDID" 2>/dev/null || true
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          echo "simulator booted: $UDID"
+
+      - name: Run simulator dlopen tests
+        run: |
+          set -uxo pipefail
+          if [ ! -f dist/TsCore-cshared-sim.dylib ] || [ ! -f dist/dlopen_test_sim ]; then
+            echo "c-shared sim dylib or host test missing; skipping"
+            exit 0
+          fi
+          SIMDATA="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data"
+          mkdir -p "$SIMDATA/tmp" "$SIMDATA/tmp/Documents"
+          cp dist/TsCore-cshared-sim.dylib dist/TsCore-cshared-sim-lazy.dylib dist/dlopen_test_sim "$SIMDATA/tmp/"
+          run_watchdog() {
+            local secs="$1"; shift
+            local out="$1"; shift
+            "$@" >"$out" 2>&1 &
+            local pid=$!
+            ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) &
+            local killer=$!
+            wait "$pid"
+            local rc=$?
+            kill "$killer" 2>/dev/null || true
+            cat "$out"
+            return $rc
+          }
+          echo "===== c-shared PLAIN variant (ctor under dlopen) ====="
+          run_watchdog 180 sim-plain.log env SIMCTL_CHILD_LC_HOME_PATH=/tmp xcrun simctl spawn "$UDID" /tmp/dlopen_test_sim /tmp/TsCore-cshared-sim.dylib || echo "RC=$? (non-zero; expected if ctor pthread_create deadlocks under dlopen)"
+          echo "===== c-shared LAZY variant (TsEnsureInit after dlopen) ====="
+          run_watchdog 180 sim-lazy.log env SIMCTL_CHILD_LC_HOME_PATH=/tmp xcrun simctl spawn "$UDID" /tmp/dlopen_test_sim /tmp/TsCore-cshared-sim-lazy.dylib --lazy || echo "RC=$? (non-zero)"
+          echo "===== boot traces inside simulator ====="
+          cat "$SIMDATA/tmp/tscore-boot.log" 2>/dev/null || true
+          cat "$SIMDATA/tmp/Documents/tscore-boot.log" 2>/dev/null || echo "(no boot log found)"
+          echo "===== results ====="
+          grep -h "TEST-PASS" sim-plain.log sim-lazy.log 2>/dev/null || echo "NO TEST-PASS FOUND"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cshared-dylibs
+          path: |
+            dist/TsCore-cshared-*
+            sim-*.log
+          if-no-files-found: ignore
