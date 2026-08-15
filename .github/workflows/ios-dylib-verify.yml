@@ -168,8 +168,7 @@ jobs:
           UDID="$(python3 - <<'EOF'
 import json, subprocess
 out = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
-devs = [d for ds in out.get("devices", {}).values() for d in ds
-        if d.get("isAvailable") and d.get("name", "").startswith("iPhone")]
+devs = [d for ds in out.get("devices", {}).values() for d in ds if d.get("isAvailable") and d.get("name", "").startswith("iPhone")]
 print(devs[0]["udid"] if devs else "")
 EOF
           )"
