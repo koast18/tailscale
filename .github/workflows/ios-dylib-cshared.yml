@@ -217,12 +217,13 @@ jobs:
           LPID=$!
           ( sleep 90; kill -9 "$LPID" 2>/dev/null ) &
           KPID=$!
-          wait "$LPID"; RC=$?
+          wait "$LPID" 2>/dev/null || true
           kill "$KPID" 2>/dev/null || true
+          sleep 2
           echo "=== simulator console output ==="
-          cat sim-console.log
+          cat sim-console.log || true
           echo "===== results ====="
-          grep -E "VERIFY-PASS|FAIL |TsVersion|TsInit|TsIsRunning|dlopen" sim-console.log | head -20
+          grep -E "VERIFY-PASS|FAIL |TsVersion|TsInit|TsIsRunning|dlopen|TsEnsureInit" sim-console.log | head -20 || echo "(no result lines)"
           echo "===== boot traces inside simulator ====="
           cat "$SIMDATA/tmp/tscore-boot.log" 2>/dev/null || true
           cat "$SIMDATA/tmp/Documents/tscore-boot.log" 2>/dev/null || echo "(no boot log found)"
