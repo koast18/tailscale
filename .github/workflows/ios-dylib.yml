@@ -153,6 +153,31 @@ jobs:
           echo "--- LC_CODE_SIGNATURE ---"
           otool -l dist/libTailscaleCore.dylib | grep -A4 LC_CODE_SIGNATURE || { echo "::error::no LC_CODE_SIGNATURE after codesign"; exit 1; }
 
+      - name: Final sign with app p12 (optional, required for iOS dlopen)
+        if: env.SKIP_BUILD != '1' && env.SIGN_P12_B64 != ''
+        env:
+          SIGN_P12_B64: ${{ secrets.TSCORE_P12_B64 }}
+          SIGN_P12_PASS: ${{ secrets.TSCORE_P12_PASSWORD }}
+        run: |
+          set -euxo pipefail
+          # iOS AMFI rejects ad-hoc signatures on standalone dylibs loaded from
+          # the app data container: the dylib must be signed with the SAME
+          # certificate as the LiveContainer host app. Configure the secrets
+          # TSCORE_P12_B64 (base64 of the .p12) and TSCORE_P12_PASSWORD to
+          # enable this final signing; otherwise the ad-hoc signature from the
+          # previous step is kept.
+          echo "$SIGN_P12_B64" | base64 -d > /tmp/sign.p12
+          KEYCHAIN=/tmp/tscore.keychain-db
+          security create-keychain -p "" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          security import /tmp/sign.p12 -k "$KEYCHAIN" -P "$SIGN_P12_PASS" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -o '"[^"]*"' | head -1 | tr -d '"')"
+          codesign --force --sign "$IDENTITY" --timestamp=none dist/libTailscaleCore.dylib
+          echo "--- p12-signed verification ---"
+          codesign -dv --verbose=2 dist/libTailscaleCore.dylib 2>&1 || true
+
       - name: Verify Mach-O format
         if: env.SKIP_BUILD != '1'
         run: |
