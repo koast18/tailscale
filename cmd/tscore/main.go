@@ -103,7 +103,7 @@ func getSrv() (*tsnet.Server, error) {
 // persistence directory and hostname. It does not connect to the tailnet.
 //
 //export TsInit
-func TsInit(dir *C.char, hostname *C.char) C.int {
+func TsInit(dir *C.char, hn *C.char) C.int {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -116,8 +116,8 @@ func TsInit(dir *C.char, hostname *C.char) C.int {
 		d = C.GoString(dir)
 	}
 	h := ""
-	if hostname != nil {
-		h = C.GoString(hostname)
+	if hn != nil {
+		h = C.GoString(hn)
 	}
 	if d == "" {
 		base, err := os.UserConfigDir()
