@@ -46,12 +46,13 @@ func saveDerpOnly(v bool) error {
 	return os.WriteFile(filepath.Join(dir, derpOnlyFile), b, 0o600)
 }
 
-// restoreDerpOnly is called from TsInit: re-applies the persisted flag so the
-// derp-only setting survives app restarts.
+// restoreDerpOnly is called from TsInit (which already holds mu): re-applies
+// the persisted flag so the derp-only setting survives app restarts.
+// NOTE: must NOT take mu itself - TsInit holds it (sync.Mutex is not
+// reentrant; locking again here self-deadlocks, which manifested as the
+// "black screen at dlopen" hang in earlier on-device tests).
 func restoreDerpOnly() {
-	mu.Lock()
 	dir := stateDir
-	mu.Unlock()
 	if dir == "" {
 		return
 	}
