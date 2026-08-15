@@ -1,0 +1,8 @@
+name: TSCORE-WF-PARSE-TEST
+on:
+  workflow_dispatch:
+jobs:
+  t:
+    runs-on: macos-15
+    steps:
+      - run: echo hi
