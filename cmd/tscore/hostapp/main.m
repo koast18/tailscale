@@ -51,12 +51,17 @@ static void logLine(NSMutableString *buf, NSString *line) {
 
     self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
     self.window.backgroundColor = UIColor.whiteColor;
-    self.label = [[UILabel alloc] initWithFrame:UIEdgeInsetsInsetRect(self.window.bounds,
-                                                                     UIEdgeInsetsMake(80, 20, 40, 20))];
+    self.label = [[UILabel alloc] initWithFrame:CGRectZero];
     self.label.numberOfLines = 0;
     self.label.font = [UIFont systemFontOfSize:13];
     self.label.text = @"TsCoreVerify starting...";
-    [self.window addSubview:self.label];
+    UIViewController *root = [UIViewController new];
+    root.view.backgroundColor = UIColor.whiteColor;
+    self.label.frame = UIEdgeInsetsInsetRect(root.view.bounds,
+                                             UIEdgeInsetsMake(80, 20, 40, 20));
+    self.label.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [root.view addSubview:self.label];
+    self.window.rootViewController = root;
     [self.window makeKeyAndVisible];
     [self performSelectorInBackground:@selector(runVerification) withObject:nil];
     return YES;

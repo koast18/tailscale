@@ -224,9 +224,6 @@ jobs:
           cat sim-console.log || true
           echo "===== results ====="
           grep -E "VERIFY-PASS|FAIL |TsVersion|TsInit|TsIsRunning|dlopen|TsEnsureInit" sim-console.log | head -20 || echo "(no result lines)"
-          echo "===== boot traces inside simulator ====="
-          cat "$SIMDATA/tmp/tscore-boot.log" 2>/dev/null || true
-          cat "$SIMDATA/tmp/Documents/tscore-boot.log" 2>/dev/null || echo "(no boot log found)"
           echo "===== results ====="
           grep -h "TEST-PASS" sim-*.log 2>/dev/null || echo "NO TEST-PASS FOUND"
 
