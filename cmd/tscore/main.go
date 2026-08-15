@@ -20,6 +20,8 @@ package main
 #include <stdio.h>
 #include <time.h>
 #include <string.h>
+#include <pthread.h>
+#include <unistd.h>
 
 // Boot trace: writes a line as soon as dyld runs this dylib's constructors,
 // BEFORE the Go runtime initializes. This lets us tell whether a black screen
@@ -27,9 +29,10 @@ package main
 // or (d) a later Ts* call. Log goes to <LC_HOME_PATH>/Documents/tscore-boot.log
 // (the LiveContainer sandbox path) or /tmp as a fallback.
 //
-// A heartbeat thread is started too: if the log keeps growing with "hb" lines
-// but "go-init" never appears, the main thread is stuck inside Go runtime
-// startup (or a package init) while the process is otherwise alive.
+// NOTE: no threads may be created here - iOS dyld holds an internal lock while
+// running constructors during dlopen, and pthread_create from inside a
+// constructor deadlocks (Go's own lib entry defers init to a new thread for the
+// same reason, but that too is a hazard under iOS dlopen).
 __attribute__((constructor))
 static void tscore_ctor_trace(void) {
     const char *home = getenv("LC_HOME_PATH");
@@ -43,24 +46,6 @@ static void tscore_ctor_trace(void) {
     if (f) {
         fprintf(f, "%lld ctor: dyld entering tscore constructors (thread %p)\n", (long long)time(NULL), (void*)pthread_self());
         fclose(f);
-    }
-
-    pthread_t th;
-    if (pthread_create(&th, NULL, tscore_heartbeat, strdup(p)) == 0) {
-        pthread_detach(th);
-    }
-}
-
-static void *tscore_heartbeat(void *arg) {
-    char *p = (char*)arg;
-    int n = 0;
-    for (;;) {
-        sleep(2);
-        FILE *f = fopen(p, "a");
-        if (f) {
-            fprintf(f, "%lld hb alive (%d)\n", (long long)time(NULL), n++);
-            fclose(f);
-        }
     }
 }
 

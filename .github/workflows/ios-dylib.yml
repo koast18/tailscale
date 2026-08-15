@@ -12,6 +12,13 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      build_probe:
+        type: boolean
+        default: false
+        description: >-
+          Also build ProbeMinimal.dylib (no tailscale deps) to bisect the
+          iOS dlopen hang (Go-runtime issue vs tailscale package inits).
   # Reusable: sync-upstream-release.yml calls this with release_tag set.
   workflow_call:
     inputs:
@@ -257,6 +264,34 @@ jobs:
           UNDEF="$(nm -u dist/libTailscaleCore.dylib)"
           echo "Undefined symbols (allowed: dyld stubs only):"
           echo "$UNDEF"
+
+      - name: Build minimal probe dylib (bisect dlopen hang)
+        if: env.SKIP_BUILD != '1' && github.event.inputs.build_probe == 'true'
+        run: |
+          set -euxo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mios-version-min=15.0"
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
+          CC="${CC}" \
+          CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
+          CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
+          go build -buildmode=c-archive -trimpath -ldflags "-s -w" \
+            -o dist/probe.a ./cmd/tscoreprobe
+          clang -dynamiclib -arch arm64 -isysroot "${SDK}" -mios-version-min=15.0 \
+            -Wl,-all_load -Wl,-ObjC dist/probe.a \
+            -framework Foundation -framework Security -framework CoreFoundation \
+            -o dist/ProbeMinimal.dylib
+          codesign -s - --force dist/ProbeMinimal.dylib
+          file dist/ProbeMinimal.dylib
+          lipo -info dist/ProbeMinimal.dylib || true
+
+      - name: Upload probe artifact
+        if: env.SKIP_BUILD != '1' && github.event.inputs.build_probe == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProbeMinimal
+          path: dist/ProbeMinimal.dylib
+          if-no-files-found: error
 
       - name: Upload artifact
         if: env.SKIP_BUILD != '1'
