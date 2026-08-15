@@ -139,6 +139,20 @@ jobs:
           cp dist/libTailscaleCore-arm64.h dist/libTailscaleCore.h
           rm -f dist/libTailscaleCore-arm64.a dist/libTailscaleCore-arm64.h
 
+      - name: Ad-hoc code sign (required for iOS dlopen)
+        if: env.SKIP_BUILD != '1'
+        run: |
+          set -euxo pipefail
+          # iOS dyld refuses to dlopen an unsigned Mach-O. The clang -dynamiclib
+          # link does not add LC_CODE_SIGNATURE, so sign ad-hoc here. The final
+          # on-device signing (e.g. LiveContainer's ZSign with a local p12)
+          # replaces this on top.
+          codesign -s - --force dist/libTailscaleCore.dylib
+          echo "--- codesign verification ---"
+          codesign -dv --verbose=2 dist/libTailscaleCore.dylib 2>&1 || true
+          echo "--- LC_CODE_SIGNATURE ---"
+          otool -l dist/libTailscaleCore.dylib | grep -A4 LC_CODE_SIGNATURE || { echo "::error::no LC_CODE_SIGNATURE after codesign"; exit 1; }
+
       - name: Verify Mach-O format
         if: env.SKIP_BUILD != '1'
         run: |
