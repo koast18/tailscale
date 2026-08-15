@@ -202,11 +202,12 @@ jobs:
           SIMDATA="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data"
           mkdir -p "$SIMDATA/tmp" "$SIMDATA/tmp/Documents"
           echo "===== simulator filesystem probe ====="
-          xcrun simctl spawn "$UDID" /bin/sh -c 'echo PWD=$(pwd); echo "-- /tmp --"; ls -ld /tmp 2>&1; echo "-- /var/tmp --"; ls -ld /var/tmp 2>&1; echo "-- /private/var/tmp --"; ls -ld /private/var/tmp 2>&1; echo "-- df --"; df -h / 2>&1 | head -4; echo PROBE-OK' || echo "(probe failed)"
-          # Copy into every candidate tmp location.
-          for d in "$SIMDATA/tmp" "$SIMDATA/var/tmp" "$SIMDATA/private/var/tmp"; do
-            mkdir -p "$d" && cp "$DYLIB" "$d/TsCore-test.dylib" && cp dist/dlopen_test_sim "$d/" && echo "copied to $d"
-          done
+          xcrun simctl spawn "$UDID" /bin/sh -c 'echo MARKER1 > /tmp/marker.txt; echo MARKER2 > /var/tmp/marker2.txt; echo PROBE-OK'
+          echo "--- where did the markers land on the host? ---"
+          find "$SIMDATA" -name "marker*.txt" 2>/dev/null || echo "(markers not found under SIMDATA)"
+          # Push the test binary + dylib into the simulator's filesystem via stdin.
+          cat dist/dlopen_test_sim | xcrun simctl spawn "$UDID" /bin/sh -c 'cat > /tmp/dlopen_test_sim && chmod 755 /tmp/dlopen_test_sim && echo PUSHED-test-ok'
+          cat "$DYLIB" | xcrun simctl spawn "$UDID" /bin/sh -c 'cat > /tmp/TsCore-test.dylib && chmod 755 /tmp/TsCore-test.dylib && echo PUSHED-dylib-ok'
           run_watchdog() {
             local secs="$1"; shift
             local out="$1"; shift
