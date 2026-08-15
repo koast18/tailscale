@@ -1,0 +1,72 @@
+# Builds libTailscaleCore.dylib with a Go runtime patched for startup tracing
+# (cmd/tscore/patches/go-runtime-init-trace.patch). The patched runtime logs
+# initialization phases to /tmp/tscore-init.log and
+# <LC_HOME_PATH>/Documents/tscore-init.log so the iOS dlopen hang can be
+# attributed to a specific runtime phase. Purely diagnostic: it does not
+# change runtime behavior or constructor semantics (no synchronous init).
+name: Build dylib with patched Go runtime
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Download and patch Go toolchain source
+        run: |
+          set -euxo pipefail
+          # Pin to the same version tailscale's go.mod requires.
+          GOTOOLCHAIN_VER="$(grep '^go ' go.mod | awk '{print $2}')"
+          echo "Patching Go $GOTOOLCHAIN_VER"
+          curl -fsSL "https://go.dev/dl/go${GOTOOLCHAIN_VER}.src.tar.gz" -o /tmp/go.src.tar.gz
+          tar -C /tmp -xzf /tmp/go.src.tar.gz
+          cd /tmp/go
+          patch -p1 < "$GITHUB_WORKSPACE/cmd/tscore/patches/go-runtime-init-trace.patch"
+          echo "=== patch applied ==="
+
+      - name: Build patched Go toolchain
+        run: |
+          set -euxo pipefail
+          cd /tmp/go/src
+          GOROOT_BOOTSTRAP="$(go env GOROOT)" ./make.bash
+          /tmp/go/bin/go version
+
+      - name: Build dylib with patched toolchain
+        run: |
+          set -euxo pipefail
+          export PATH="/tmp/go/bin:$PATH"
+          export GOTOOLCHAIN=local
+          mkdir -p dist
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mios-version-min=15.0"
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
+          CC="${CC}" \
+          CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
+          CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
+          go build -buildmode=c-archive -trimpath -ldflags "-s -w" \
+            -o dist/libTailscaleCore-arm64.a ./cmd/tscore
+          clang -dynamiclib -arch arm64 -isysroot "${SDK}" -mios-version-min=15.0 \
+            -Wl,-all_load -Wl,-ObjC dist/libTailscaleCore-arm64.a \
+            -framework Foundation -framework Security -framework CoreFoundation \
+            -o dist/libTailscaleCore-patched.dylib
+          codesign -s - --force dist/libTailscaleCore-patched.dylib
+          file dist/libTailscaleCore-patched.dylib
+          nm -gU dist/libTailscaleCore-patched.dylib | awk '{print $NF}' | sed 's/^_//' | grep -c '^Ts' || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libTailscaleCore-patched
+          path: |
+            dist/libTailscaleCore-patched.dylib
+            dist/libTailscaleCore-arm64.h
+          if-no-files-found: error

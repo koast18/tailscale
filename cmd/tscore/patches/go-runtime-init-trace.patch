@@ -1,0 +1,95 @@
+diff --git a/src/runtime/tsinittrace.go b/src/runtime/tsinittrace.go
+new file mode 100644
+--- /dev/null
++++ b/src/runtime/tsinittrace.go
+@@ -0,0 +1,66 @@
++//go:build darwin
++
++package runtime
++
++import "unsafe"
++
++// Startup trace for diagnosing dlopen hangs on iOS: the Go runtime of a
++// c-archive-based dylib initializes on a background thread spawned by the
++// constructor; when that thread stalls, every exported function blocks on
++// main_init_done. These helpers append "nanotime phase" lines to
++// /tmp/tscore-init.log (and, once env is available, to
++// <LC_HOME_PATH>/Documents/tscore-init.log) using raw syscalls, so they work
++// before the heap/threads exist. No allocation, no locking.
++var (
++	tsInitTraceTmpFD   int32 = -1
++	tsInitTraceDocFD   int32 = -1
++	tsInitTraceDocDone int32 = 0 // 0=untried 1=done(ok) 2=done(no env)
++)
++
++//go:noinline
++func tsInitTrace(phase string) {
++	writeTraceFD(&tsInitTraceTmpFD, "/tmp/tscore-init.log\x00", phase)
++	if tsInitTraceDocDone == 0 {
++		if home := gogetenv("LC_HOME_PATH"); home != "" {
++			var b [128]byte
++			n := copy(b[:], home)
++			n += copy(b[n:], "/Documents/tscore-init.log")
++			if n < len(b) {
++				b[n] = 0
++				tsInitTraceDocFD = open(&b[0], _O_WRONLY|_O_CREAT, 0o644)
++				tsInitTraceDocDone = 1
++			} else {
++				tsInitTraceDocDone = 2
++			}
++		} else {
++			tsInitTraceDocDone = 2
++		}
++	}
++	writeTraceFD(&tsInitTraceDocFD, "", phase)
++}
++
++//go:noinline
++func writeTraceFD(fd *int32, path, phase string) {
++	if *fd < 0 && path != "" {
++		*fd = open(&rawBytes(path)[0], _O_WRONLY|_O_CREAT, 0o644)
++	}
++	if *fd < 0 {
++		return
++	}
++	var b [128]byte
++	buf := itoa(b[:0], uint64(nanotime()))
++	buf = append(buf, ' ')
++	buf = append(buf, phase...)
++	buf = append(buf, '\n')
++	write1(uintptr(*fd), unsafe.Pointer(&buf[0]), int32(len(buf)))
++}
++
++// rawBytes returns the address of s's data as a NUL-terminated byte slice.
++// The caller must ensure s contains a trailing '\x00' and fits in a stack
++// buffer; used only with compile-time constants above.
++func rawBytes(s string) []byte {
++	return unsafe.Slice(unsafe.StringData(s), len(s))
++}
+diff --git a/src/runtime/os_darwin.go b/src/runtime/os_darwin.go
+--- a/src/runtime/os_darwin.go
++++ b/src/runtime/os_darwin.go
+@@ -148,6 +148,8 @@ func osinit() {
+ 	// pthread_create delayed until end of goenvs so that we
+ 	// can look at the environment first.
++	tsInitTrace("osinit")
+ 
+ 	numCPUStartup = getCPUCount()
+diff --git a/src/runtime/proc.go b/src/runtime/proc.go
+--- a/src/runtime/proc.go
++++ b/src/runtime/proc.go
+@@ -829,6 +829,8 @@ func schedinit() {
+ 	lockInit(&sched.lock, lockRankSched)
++	tsInitTrace("schedinit")
+ 	lockInit(&sched.sysmonlock, lockRankSysmon)
+@@ -149,6 +149,7 @@ func main() {
+ 	mp := getg().m
++	tsInitTrace("main-enter")
+ 
+ 	// Racectx of m0->g0 is used only as the parent of the main goroutine.
+@@ -255,6 +255,7 @@ func main() {
+ 	// of collecting statistics in malloc and newproc
+ 	inittrace.active = false
+ 
++	tsInitTrace("main-init-done")
+ 	close(main_init_done)
