@@ -212,13 +212,14 @@ jobs:
             echo "Release $TAG already exists; skipping."
             exit 0
           fi
-          gh release create "$TAG" \
-            dist/libTailscaleCore.dylib dist/libTailscaleCore.h \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Tailscale Core dylib $TAG" \
-            --notes "Automated build of the Tailscale core dylib for iOS sideloading.
-
+          NOTES="Automated build of the Tailscale core dylib for iOS sideloading."
+          NOTES="${NOTES}
 - libTailscaleCore.dylib: arm64 Mach-O dylib (Go c-archive -> clang dynamiclib), iOS 15+
 - libTailscaleCore.h: generated C header (all Ts* exports)
 
 See cmd/tscore/README.md for integration details."
+          gh release create "$TAG" \
+            dist/libTailscaleCore.dylib dist/libTailscaleCore.h \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Tailscale Core dylib $TAG" \
+            --notes "$NOTES"
