@@ -23,9 +23,13 @@ package main
 
 // Boot trace: writes a line as soon as dyld runs this dylib's constructors,
 // BEFORE the Go runtime initializes. This lets us tell whether a black screen
-// is caused by (a) dyld/ctor entry, (b) Go runtime init, or (c) a later Ts*
-// call. Log goes to <LC_HOME_PATH>/Documents/tscore-boot.log (the LiveContainer
-// sandbox path) or /tmp as a fallback.
+// is caused by (a) dyld/ctor entry, (b) Go runtime init, (c) a package init,
+// or (d) a later Ts* call. Log goes to <LC_HOME_PATH>/Documents/tscore-boot.log
+// (the LiveContainer sandbox path) or /tmp as a fallback.
+//
+// A heartbeat thread is started too: if the log keeps growing with "hb" lines
+// but "go-init" never appears, the main thread is stuck inside Go runtime
+// startup (or a package init) while the process is otherwise alive.
 __attribute__((constructor))
 static void tscore_ctor_trace(void) {
     const char *home = getenv("LC_HOME_PATH");
@@ -37,10 +41,29 @@ static void tscore_ctor_trace(void) {
     }
     FILE *f = fopen(p, "a");
     if (f) {
-        fprintf(f, "%lld ctor: dyld entering tscore constructors\n", (long long)time(NULL));
+        fprintf(f, "%lld ctor: dyld entering tscore constructors (thread %p)\n", (long long)time(NULL), (void*)pthread_self());
         fclose(f);
     }
+
+    pthread_t th;
+    if (pthread_create(&th, NULL, tscore_heartbeat, strdup(p)) == 0) {
+        pthread_detach(th);
+    }
 }
+
+static void *tscore_heartbeat(void *arg) {
+    char *p = (char*)arg;
+    int n = 0;
+    for (;;) {
+        sleep(2);
+        FILE *f = fopen(p, "a");
+        if (f) {
+            fprintf(f, "%lld hb alive (%d)\n", (long long)time(NULL), n++);
+            fclose(f);
+        }
+    }
+}
+
 
 
 typedef void (*TsLogFn)(const char* msg);
