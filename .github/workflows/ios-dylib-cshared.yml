@@ -95,12 +95,23 @@ jobs:
           (cd /tmp/probe/cgo && CGO_ENABLED=1 GOOS=ios GOARCH=arm64 CC="${CC}" CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" go build -buildmode=c-shared -o /tmp/probe/cgo.dylib .) && echo "B LINK OK" || echo "B LINK FAILED"
           otool -l /tmp/probe/cgo.dylib 2>/dev/null | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(B: no init sections)"
           nm -gU /tmp/probe/cgo.dylib 2>/dev/null | grep "_rt0_arm64" | head -3 || echo "(B: no rt0 syms)"
-          echo "=== C) c-shared, current tscore (with lazy-init preamble): link? ctor? ==="
+          echo "=== C) c-shared, current tscore (wait-only preamble): link? ctor? ==="
           cd "$GITHUB_WORKSPACE"
+          mkdir -p dist
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
           CC="${CC}" CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
           CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
-          go build -buildmode=c-shared -trimpath -ldflags "-s -w" -o /tmp/probe/tscore-cur.dylib ./cmd/tscore && echo "C LINK OK" || echo "C LINK FAILED"
+          go build -buildmode=c-shared -trimpath -ldflags "-s -w" -o dist/TsCore-cshared-sim.dylib ./cmd/tscore && echo "C LINK OK" || echo "C LINK FAILED"
+          echo "--- C dylib init sections ---"
+          otool -l dist/TsCore-cshared-sim.dylib 2>/dev/null | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(C: no init sections)"
+          echo "--- C dylib Ts*/cgo exports ---"
+          nm -gU dist/TsCore-cshared-sim.dylib 2>/dev/null | grep -E "TsVersion|TsInit$|TsEnsureInit|cgo_wait|Probe" | head -8
+          codesign -s - --force dist/TsCore-cshared-sim.dylib
+          cp dist/TsCore-cshared-sim.dylib dist/TsCore-cshared-sim-lazy.dylib
+          python3 "$GITHUB_WORKSPACE/cmd/tscore/tools/stripinits.py" dist/TsCore-cshared-sim-lazy.dylib 2>/dev/null || echo "(stripinits: no init sections?)"
+          codesign -s - --force dist/TsCore-cshared-sim-lazy.dylib
+          echo "--- C lazy init sections (should be gone) ---"
+          otool -l dist/TsCore-cshared-sim-lazy.dylib 2>/dev/null | grep -E "__init_offsets|__mod_init_func" || echo "(C lazy: no init sections - OK)"
           echo "=== D) c-archive + clang dylib, current tscore: rt0 defined in archive? ==="
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
           CC="${CC}" CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-simulator-version-min=15.0" \
@@ -128,6 +139,7 @@ jobs:
           export GOTOOLCHAIN=local
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mios-version-min=15.0"
+          mkdir -p dist
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
           CC="${CC}" \
           CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
@@ -135,14 +147,14 @@ jobs:
           go build -buildmode=c-shared -trimpath -ldflags "-s -w" \
             -o dist/TsCore-cshared-device.dylib ./cmd/tscore
           cp dist/TsCore-cshared-device.dylib dist/TsCore-cshared-device-lazy.dylib
-          python3 cmd/tscore/tools/stripinits.py dist/TsCore-cshared-device-lazy.dylib
+          python3 cmd/tscore/tools/stripinits.py dist/TsCore-cshared-device-lazy.dylib 2>/dev/null || true
           codesign -s - --force dist/TsCore-cshared-device.dylib
           codesign -s - --force dist/TsCore-cshared-device-lazy.dylib
           file dist/TsCore-cshared-device.dylib dist/TsCore-cshared-device-lazy.dylib
           echo "--- device init sections ---"
-          otool -l dist/TsCore-cshared-device.dylib | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(none)"
-          echo "--- device key symbols ---"
-          nm -gU dist/TsCore-cshared-device.dylib | grep -E "_rt0_arm64|cgo_wait" | head
+          otool -l dist/TsCore-cshared-device.dylib 2>/dev/null | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(none)"
+          echo "--- device Ts* count ---"
+          nm -gU dist/TsCore-cshared-device.dylib 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | grep -c '^Ts' || true
 
       - name: Build simulator host test
         continue-on-error: true
