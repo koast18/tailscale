@@ -139,33 +139,22 @@ jobs:
           cp dist/libTailscaleCore-arm64.h dist/libTailscaleCore.h
           rm -f dist/libTailscaleCore-arm64.a dist/libTailscaleCore-arm64.h
 
-      - name: Ad-hoc code sign (required for iOS dlopen)
-        if: env.SKIP_BUILD != '1'
-        run: |
-          set -euxo pipefail
-          # iOS dyld refuses to dlopen an unsigned Mach-O. The clang -dynamiclib
-          # link does not add LC_CODE_SIGNATURE, so sign ad-hoc here. The final
-          # on-device signing (e.g. LiveContainer's ZSign with a local p12)
-          # replaces this on top.
-          codesign -s - --force dist/libTailscaleCore.dylib
-          echo "--- codesign verification ---"
-          codesign -dv --verbose=2 dist/libTailscaleCore.dylib 2>&1 || true
-          echo "--- LC_CODE_SIGNATURE ---"
-          otool -l dist/libTailscaleCore.dylib | grep -A4 LC_CODE_SIGNATURE || { echo "::error::no LC_CODE_SIGNATURE after codesign"; exit 1; }
-
-      - name: Final sign with app p12 (optional, required for iOS dlopen)
+      - name: Final sign with app p12 (optional)
         if: env.SKIP_BUILD != '1' && env.SIGN_P12_B64 != ''
         env:
           SIGN_P12_B64: ${{ secrets.TSCORE_P12_B64 }}
           SIGN_P12_PASS: ${{ secrets.TSCORE_P12_PASSWORD }}
         run: |
           set -euxo pipefail
-          # iOS AMFI rejects ad-hoc signatures on standalone dylibs loaded from
-          # the app data container: the dylib must be signed with the SAME
-          # certificate as the LiveContainer host app. Configure the secrets
-          # TSCORE_P12_B64 (base64 of the .p12) and TSCORE_P12_PASSWORD to
-          # enable this final signing; otherwise the ad-hoc signature from the
-          # previous step is kept.
+          # If TSCORE_P12_B64/TSCORE_P12_PASSWORD secrets are set, sign the
+          # dylib with the host app's certificate here so it is loadable
+          # immediately.
+          #
+          # Otherwise the dylib is shipped UNSIGNED on purpose: LiveContainer's
+          # signTweaks (F_CHECK_LV) treats an ad-hoc signature as "valid" and
+          # skips re-signing, while dyld rejects ad-hoc at dlopen time. An
+          # unsigned dylib is instead re-signed automatically by LiveContainer
+          # (ZSign + imported certificate), which is what makes it loadable.
           echo "$SIGN_P12_B64" | base64 -d > /tmp/sign.p12
           KEYCHAIN=/tmp/tscore.keychain-db
           security create-keychain -p "" "$KEYCHAIN"
