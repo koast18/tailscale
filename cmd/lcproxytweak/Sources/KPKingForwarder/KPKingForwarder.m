@@ -17,7 +17,7 @@ static int const KPFetchTimeoutMs = 10000;
 NSString *KPMaskedLoginHost(NSString *guid, NSString *token) {
     NSString *g = KPMaskGUID(guid ?: @"");
     NSString *t = KPMaskSecret(token ?: @"");
-    return [NSString stringWithFormat:@"%@.%@.iikira.com.token", g, t];
+    return [NSString stringWithFormat:@"iikira.com (guid=%@ token=%@)", g, t];
 }
 
 @interface KPKingForwarder ()

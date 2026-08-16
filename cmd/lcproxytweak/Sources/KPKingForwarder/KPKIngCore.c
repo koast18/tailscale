@@ -243,7 +243,9 @@ void kp_analyze_body(const char *body, size_t len,
 int kp_build_login_host(const char *guid, const char *token, char *out, size_t out_cap) {
     if (!guid || !token || !out) return -1;
     if (kp_validate_creds_for_host(guid, token) != 0) return -1; // 拼 Host 前必须 hostname 安全
-    return kp_snprintf_checked(out, out_cap, "%s.%s.iikira.com.token", guid, token);
+    // 2026：魔改域名 {guid}.{token}.iikira.com.token 已被网关淘汰（CONNECT 静默挂起）；
+    // 现网网关识别 iikira.com 裸域名 + Q-GUID/Q-Token 头即完成会话激活（本地实测 CONNECT 200）。
+    return kp_snprintf_checked(out, out_cap, "iikira.com");
 }
 
 int kp_build_connect_request(const char *target_host, int target_port,
