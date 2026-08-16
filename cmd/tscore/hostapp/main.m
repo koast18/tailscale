@@ -117,8 +117,8 @@ static void logLine(NSMutableString *buf, NSString *line) {
     // (controlplane.tailscale.com). On the simulator this must not return
     // "Bad Request" from the control server (that happens when the request
     // is mangled by a proxy/MITM or rejected by the server).
-    TsStartFn start = (TsStartFn)dlsym(h, @"TsStart");
-    TsNeedsLoginFn needsLogin = (TsNeedsLoginFn)dlsym(h, @"TsNeedsLogin");
+    TsStartFn start = (TsStartFn)dlsym(h, "TsStart");
+    TsNeedsLoginFn needsLogin = (TsNeedsLoginFn)dlsym(h, "TsNeedsLogin");
     if (!start || !needsLogin) {
         logLine(out, [NSString stringWithFormat:@"FAIL dlsym TsStart/TsNeedsLogin: %s", dlerror()]);
         [self showResult:out];
