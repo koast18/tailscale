@@ -134,16 +134,13 @@ jobs:
           codesign --force --sign "$IDENTITY" --timestamp=none dist/libTailscaleCore-lazy.dylib
           codesign --force --sign "$IDENTITY" --timestamp=none dist/TsCoreVerify.app
 
-      - name: Generate header for C ABI dylib
+      - name: Collect generated header
         run: |
           set -euxo pipefail
-          # c-shared emits a header next to the dylib (dist/libTailscaleCore.h
-          # would be written by go build; re-derive it here).
-          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
-          CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
-          go build -buildmode=c-shared -trimpath -o /tmp/header-probe ./cmd/tscore 2>/dev/null || true
-          ls /tmp/header-probe.h 2>/dev/null && cp /tmp/header-probe.h dist/libTailscaleCore.h || echo "using generated header from build"
+          # go build -buildmode=c-shared -o dist/libTailscaleCore.dylib also
+          # writes the C header next to the dylib (dist/libTailscaleCore.h).
+          ls -la dist/libTailscaleCore.h
+          head -30 dist/libTailscaleCore.h
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
