@@ -85,9 +85,9 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           TAG="${{ env.TAG }}"
           VERSION="${{ env.VER }}"
-          SIZE="$(stat -f%z cmd/lcproxytweak/build/LCProxyConsole-${VER}.ipa)"
+          SIZE="$(stat -f%z cmd/lcproxytweak/build/LCProxyConsole-v${VER}.ipa)"
           NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          IPA_URL="https://gh-proxy.com/https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/LCProxyConsole-${VER}.ipa"
+          IPA_URL="https://gh-proxy.com/https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/LCProxyConsole-v${VER}.ipa"
           ICON_URL="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/altstore/icon.png"
           mkdir -p altstore
           python3 - "$TAG" "$VERSION" "$SIZE" "$NOW" "$IPA_URL" "$ICON_URL" > altstore/altstore-source.json <<'EOF'
