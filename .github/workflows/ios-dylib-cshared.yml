@@ -311,7 +311,9 @@ jobs:
           echo "=== simulator console output ==="
           cat sim-console.log || true
           echo "===== results ====="
-          grep -E "VERIFY-PASS|FAIL |TsVersion|TsInit|TsIsRunning|dlopen|TsEnsureInit" sim-console.log | head -20 || echo "(no result lines)"
+          grep -E "VERIFY-PASS|FAIL |TsVersion|TsInit|TsIsRunning|dlopen|TsEnsureInit|NETTEST|TsStart|TsNeedsLogin" sim-console.log | head -25 || echo "(no result lines)"
+          echo "===== control plane errors (if any) ====="
+          grep -E "control:|fetch control key|Bad Request|controlplane" sim-console.log | head -8 || echo "(no control lines)"
           echo "===== results ====="
           grep -h "TEST-PASS" sim-*.log 2>/dev/null || echo "NO TEST-PASS FOUND"
 

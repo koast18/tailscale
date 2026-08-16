@@ -18,6 +18,8 @@ typedef void (*TsEnsureInitFn)(void);
 typedef const char *(*TsVersionFn)(void);
 typedef int (*TsInitFn)(const char *, const char *);
 typedef int (*TsIsRunningFn)(void);
+typedef int (*TsStartFn)(void);
+typedef int (*TsNeedsLoginFn)(void);
 
 static NSString *g_logPath;
 
@@ -110,6 +112,27 @@ static void logLine(NSMutableString *buf, NSString *line) {
 
     int ir = running();
     logLine(out, [NSString stringWithFormat:@"TsIsRunning -> %d", ir]);
+
+    // Real network test: TsStart() connects to the Tailscale control plane
+    // (controlplane.tailscale.com). On the simulator this must not return
+    // "Bad Request" from the control server (that happens when the request
+    // is mangled by a proxy/MITM or rejected by the server).
+    TsStartFn start = (TsStartFn)dlsym(h, @"TsStart");
+    TsNeedsLoginFn needsLogin = (TsNeedsLoginFn)dlsym(h, @"TsNeedsLogin");
+    if (!start || !needsLogin) {
+        logLine(out, [NSString stringWithFormat:@"FAIL dlsym TsStart/TsNeedsLogin: %s", dlerror()]);
+        [self showResult:out];
+        return;
+    }
+    logLine(out, @"calling TsStart() (async connect, 25s window) ...");
+    int sr = start();
+    logLine(out, [NSString stringWithFormat:@"TsStart -> %d", sr]);
+    sleep(25);
+    ir = running();
+    logLine(out, [NSString stringWithFormat:@"TsIsRunning(after 25s) -> %d", ir]);
+    int nl = needsLogin();
+    logLine(out, [NSString stringWithFormat:@"TsNeedsLogin -> %d", nl]);
+    logLine(out, @"NETTEST-DONE (see tailscaled log for control server status)");
 
     logLine(out, @"VERIFY-PASS: dlopen OK, TsEnsureInit OK, exported calls OK");
     [self showResult:out];
