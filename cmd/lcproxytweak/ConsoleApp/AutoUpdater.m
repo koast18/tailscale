@@ -151,35 +151,67 @@ static BOOL gDownloadedNew = NO;
     return NO;
 }
 
-// NSURLSession downloadTask 同步封装：真实进度（received/total）经 progress 回调
+// NSURLSession dataTask 进度代理：累计已收字节 / 预期总长 → 进度回调
+@interface _KPDownloadDelegate : NSObject <NSURLSessionDataDelegate>
+@property (nonatomic, copy) void (^onProgress)(double);
+@property (nonatomic, copy) void (^onComplete)(NSError *);
+@property (nonatomic, strong) NSMutableData *acc;
+@property (nonatomic, assign) int64_t expected;
+@property (nonatomic, strong) NSHTTPURLResponse *httpResponse;
+@end
+
+@implementation _KPDownloadDelegate
+- (instancetype)init {
+    if ((self = [super init])) {
+        _acc = [NSMutableData data];
+        _expected = -1;
+    }
+    return self;
+}
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)task
+    didReceiveResponse:(NSURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
+    self.httpResponse = (NSHTTPURLResponse *)response;
+    self.expected = response.expectedContentLength;
+    completionHandler(NSURLSessionResponseAllow);
+}
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)task didReceiveData:(NSData *)data {
+    [self.acc appendData:data];
+    if (self.onProgress && self.expected > 0) {
+        self.onProgress(MIN(1.0, (double)self.acc.length / (double)self.expected));
+    }
+}
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+    if (self.onComplete) self.onComplete(error);
+}
+@end
+
+// NSURLSession dataTask 同步封装：真实进度（received/total）经 progress 回调
 + (NSData *)downloadSynchronous:(NSString *)urlString progress:(void (^)(double))progress {
-    __block NSData *result = nil;
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) { [self diag:@"[跳过] 非法 URL: %@", urlString]; return nil; }
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration defaultSessionConfiguration];
     cfg.timeoutIntervalForResource = 600;
-    NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg];
-    NSURL *url = [NSURL URLWithString:urlString];
-    if (!url) { [self diag:@"[跳过] 非法 URL: %@", urlString]; return nil; }
-    NSURLSessionDownloadTask *task = [session downloadTaskWithURL:url
-                                                completionHandler:^(NSURL *loc, NSURLResponse *resp, NSError *err) {
-        if (err) {
-            [self diag:@"[%@] 连接错误: %@ (%ld)", urlString, err.localizedDescription ?: @"?", (long)err.code];
-        } else if (((NSHTTPURLResponse *)resp).statusCode == 200 && loc) {
-            result = [NSData dataWithContentsOfURL:loc];
-            [self diag:@"[%@] HTTP 200, %ld bytes ✓", urlString, (long)result.length];
-        } else {
-            [self diag:@"[%@] HTTP %ld", urlString, (long)((NSHTTPURLResponse *)resp).statusCode];
-        }
+    _KPDownloadDelegate *dlg = [[_KPDownloadDelegate alloc] init];
+    dlg.onProgress = progress;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg delegate:dlg
+                                                     delegateQueue:[NSOperationQueue new]];
+    dlg.onComplete = ^(NSError *err) {
         [session finishTasksAndInvalidate];
         dispatch_semaphore_signal(sem);
-    }];
-    if (progress && task.progress) {
-        [task.progress setProgressHandler:^(NSProgress *p) {
-            if (progress) progress(p.fractionCompleted);
-        }];
-    }
+    };
+    NSURLSessionDataTask *task = [session dataTaskWithURL:url];
     [task resume];
     dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_SEC));
+    NSData *result = dlg.acc.length ? [dlg.acc copy] : nil;
+    NSInteger code = dlg.httpResponse.statusCode;
+    if (!result) {
+        [self diag:@"[%@] 连接失败（无数据）", urlString];
+    } else if (code == 200) {
+        [self diag:@"[%@] HTTP 200, %ld bytes ✓", urlString, (long)result.length];
+    } else {
+        [self diag:@"[%@] HTTP %ld", urlString, (long)code];
+    }
     return result;
 }
 
