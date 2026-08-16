@@ -131,7 +131,8 @@ static BOOL gDownloadedNew = NO;
     return nil;
 }
 
-+ (BOOL)downloadAsset:(NSString *)assetName toPath:(NSString *)dst {
++ (BOOL)downloadAsset:(NSString *)assetName toPath:(NSString *)dst
+           progress:(void (^)(double))progress {
     NSString *browser = [self assetDownloadURL:assetName];
     if (!browser) return NO;
     // 镜像 → 直连
@@ -139,11 +140,47 @@ static BOOL gDownloadedNew = NO;
         [NSString stringWithFormat:@"%@%@", KPAutoUpdateMirrorPrefix, browser],
         browser,
     ];
-    NSData *data = [self fetchFirstSuccess:urls];
-    if (!data) return NO;
-    NSFileManager *fm = [NSFileManager defaultManager];
-    [fm removeItemAtPath:dst error:nil];
-    return [data writeToFile:dst atomically:YES];
+    for (NSString *u in urls) {
+        NSData *data = [self downloadSynchronous:u progress:progress];
+        if (data) {
+            NSFileManager *fm = [NSFileManager defaultManager];
+            [fm removeItemAtPath:dst error:nil];
+            return [data writeToFile:dst atomically:YES];
+        }
+    }
+    return NO;
+}
+
+// NSURLSession downloadTask 同步封装：真实进度（received/total）经 progress 回调
++ (NSData *)downloadSynchronous:(NSString *)urlString progress:(void (^)(double))progress {
+    __block NSData *result = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration defaultSessionConfiguration];
+    cfg.timeoutIntervalForResource = 600;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg];
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) { [self diag:@"[跳过] 非法 URL: %@", urlString]; return nil; }
+    NSURLSessionDownloadTask *task = [session downloadTaskWithURL:url
+                                                completionHandler:^(NSURL *loc, NSURLResponse *resp, NSError *err) {
+        if (err) {
+            [self diag:@"[%@] 连接错误: %@ (%ld)", urlString, err.localizedDescription ?: @"?", (long)err.code];
+        } else if (((NSHTTPURLResponse *)resp).statusCode == 200 && loc) {
+            result = [NSData dataWithContentsOfURL:loc];
+            [self diag:@"[%@] HTTP 200, %ld bytes ✓", urlString, (long)result.length];
+        } else {
+            [self diag:@"[%@] HTTP %ld", urlString, (long)((NSHTTPURLResponse *)resp).statusCode];
+        }
+        [session finishTasksAndInvalidate];
+        dispatch_semaphore_signal(sem);
+    }];
+    if (progress && task.progress) {
+        [task.progress setProgressHandler:^(NSProgress *p) {
+            if (progress) progress(p.fractionCompleted);
+        }];
+    }
+    [task resume];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_SEC));
+    return result;
 }
 
 + (NSArray<NSString *> *)existingVersionedFilesIn:(NSString *)dir prefix:(NSString *)prefix
@@ -159,8 +196,12 @@ static BOOL gDownloadedNew = NO;
     return remove;
 }
 
-/// 自动更新入口：返回状态描述（无网络时返回 nil）
+/// 自动更新入口：返回状态描述（含完整诊断）；progress 在主线程回调
 + (nullable NSString *)runAutoUpdate {
+    return [self runAutoUpdateWithProgress:nil];
+}
+
++ (nullable NSString *)runAutoUpdateWithProgress:(KPAutoUpdateProgress)progress {
     [self resetDiagnostics];
     gDownloadedNew = NO;
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -171,6 +212,12 @@ static BOOL gDownloadedNew = NO;
     NSString *kingDir = [root stringByAppendingPathComponent:@"KingProxy"];
     [fm createDirectoryAtPath:tweaksDir withIntermediateDirectories:YES attributes:nil error:nil];
     [fm createDirectoryAtPath:kingDir withIntermediateDirectories:YES attributes:nil error:nil];
+
+    void (^emit)(NSString *, double) = ^(NSString *stage, double f) {
+        if (progress) dispatch_async(dispatch_get_main_queue(), ^{ progress(stage, f); });
+    };
+
+    emit(@"获取最新版本…", -1);
     NSString *tag = [self latestReleaseTag];
     if (!tag.length) {
         return [NSString stringWithFormat:@"获取最新版本失败\n\n%@", [self diagnostics]];
@@ -184,7 +231,9 @@ static BOOL gDownloadedNew = NO;
     NSString *tweakDst = [tweaksDir stringByAppendingPathComponent:tweakName];
     BOOL needTweak = ![fm fileExistsAtPath:tweakDst];
     if (needTweak) {
-        if ([self downloadAsset:tweakName toPath:tweakDst]) {
+        emit(@"下载 tweak…", 0);
+        if ([self downloadAsset:tweakName toPath:tweakDst
+                       progress:^(double f) { emit(@"下载 tweak…", f); }]) {
             gDownloadedNew = YES;
             [steps addObject:[NSString stringWithFormat:@"tweak %@ 已下载", tag]];
         } else {
@@ -200,7 +249,9 @@ static BOOL gDownloadedNew = NO;
     NSString *coreDst = [tweaksDir stringByAppendingPathComponent:coreName];
     BOOL needCore = ![fm fileExistsAtPath:coreDst];
     if (needCore) {
-        if ([self downloadAsset:coreName toPath:coreDst]) {
+        emit(@"下载 core（19.8MB）…", 0);
+        if ([self downloadAsset:coreName toPath:coreDst
+                       progress:^(double f) { emit(@"下载 core（19.8MB）…", f); }]) {
             gDownloadedNew = YES;
             [steps addObject:[NSString stringWithFormat:@"core %@ 已下载", tag]];
         } else {
@@ -224,6 +275,7 @@ static BOOL gDownloadedNew = NO;
         [steps addObject:[NSString stringWithFormat:@"清理旧 core %@", p.lastPathComponent]];
     }
 
+    emit(@"完成", 1);
     NSString *summary = [steps componentsJoinedByString:@"\n"];
     return [NSString stringWithFormat:@"✅ %@\n\n两个 dylib 均已放入 Tweaks/（版本化文件名）：LiveContainer 检测到无签名会自动用你导入的证书重签。请退出 App 重新打开（或重启 LiveContainer）使 tweak 生效。", summary];
 }

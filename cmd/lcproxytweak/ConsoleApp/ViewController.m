@@ -15,9 +15,11 @@ static NSString *const KPCConsoleURL = @"http://127.0.0.1:19092/";
 @interface ViewController () <WKNavigationDelegate>
 @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) UIView *errorView;
-@property (nonatomic, strong) UILabel *errorLabel;
+@property (nonatomic, strong) UITextView *logView;
+@property (nonatomic, strong) UIButton *copyButton;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, assign) BOOL loadedOnce;
+@property (nonatomic, copy) NSString *lastFullLog;
 @end
 
 @implementation ViewController
@@ -42,27 +44,49 @@ static NSString *const KPCConsoleURL = @"http://127.0.0.1:19092/";
 
 - (void)startAutoUpdate {
     self.errorView.hidden = NO;
-    self.errorLabel.text = @"正在初始化（下载两个 dylib）…\n请保持 LiveContainer 在前台";
+    [self showLog:@"正在初始化（下载两个 dylib）…\n请保持 LiveContainer 在前台"];
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSString *result = [AutoUpdater runAutoUpdate];
+        NSString *result = [AutoUpdater runAutoUpdateWithProgress:^(NSString *stage, double fraction) {
+            NSString *line = stage;
+            if (fraction >= 0) line = [NSString stringWithFormat:@"%@ %.0f%%", stage, fraction * 100];
+            [self showLog:line];
+        }];
         BOOL downloaded = [AutoUpdater downloadedAnything];
         BOOL failed = result.length > 0 && [result containsString:@"失败"];
         dispatch_async(dispatch_get_main_queue(), ^{
             self.errorView.hidden = NO;
+            self.spinner.hidden = YES;
             if (failed || downloaded) {
                 // 下载完成（或失败）：全量信息上屏，不连 19092，等用户重启
                 NSString *msg = result ?: @"（无输出）";
                 if (!failed) {
                     msg = [msg stringByAppendingString:@"\n\n请退出 App 重新打开（或重启 LiveContainer），tweak 签名生效后自动进入控制台。"];
                 }
-                self.errorLabel.text = msg;
-                self.spinner.hidden = YES;
+                [self showLog:msg];
             } else {
                 // 两个 dylib 都已存在（重启后的再次打开）：直接连控制台
-                self.errorLabel.text = @"正在连接控制台 127.0.0.1:19092 …";
+                [self showLog:@"正在连接控制台 127.0.0.1:19092 …"];
                 [self loadConsole];
             }
         });
+    });
+}
+
+// 追加一行日志到可滚动视图（长日志不会被截断），并更新复制缓存
+- (void)showLog:(NSString *)line {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.lastFullLog = line;
+        self.logView.text = line;
+        [self.logView scrollRangeToVisible:NSMakeRange(self.logView.text.length, 0)];
+    });
+}
+
+- (void)copyLog {
+    UIPasteboard *pb = [UIPasteboard generalPasteboard];
+    pb.string = self.lastFullLog ?: @"";
+    [self.copyButton setTitle:@"已复制 ✓" forState:UIControlStateNormal];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        [self.copyButton setTitle:@"📋 复制日志" forState:UIControlStateNormal];
     });
 }
 
@@ -78,14 +102,25 @@ static NSString *const KPCConsoleURL = @"http://127.0.0.1:19092/";
     [self.errorView addSubview:self.spinner];
     [self.spinner startAnimating];
 
-    self.errorLabel = [[UILabel alloc] initWithFrame:CGRectMake(24, 0, CGRectGetWidth(self.view.bounds) - 48, 120)];
-    self.errorLabel.center = CGPointMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds) + 20);
-    self.errorLabel.textAlignment = NSTextAlignmentCenter;
-    self.errorLabel.numberOfLines = 0;
-    self.errorLabel.textColor = [UIColor colorWithWhite:0.75 alpha:1];
-    self.errorLabel.font = [UIFont systemFontOfSize:15];
-    self.errorLabel.text = @"正在初始化（下载两个 dylib）…\n请保持 LiveContainer 在前台";
-    [self.errorView addSubview:self.errorLabel];
+    // 可滚动日志（UITextView）：长诊断不截断，可选中复制
+    self.logView = [[UITextView alloc] initWithFrame:CGRectMake(20, 60, CGRectGetWidth(self.view.bounds) - 40,
+                                                              CGRectGetHeight(self.view.bounds) - 140)];
+    self.logView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.logView.backgroundColor = [UIColor clearColor];
+    self.logView.textColor = [UIColor colorWithWhite:0.85 alpha:1];
+    self.logView.font = [UIFont systemFontOfSize:14];
+    self.logView.editable = NO;
+    self.logView.selectable = YES;
+    [self.errorView addSubview:self.logView];
+
+    // 复制日志按钮
+    self.copyButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.copyButton.frame = CGRectMake(20, CGRectGetHeight(self.view.bounds) - 56, 140, 40);
+    self.copyButton.autoresizingMask = UIViewAutoresizingFlexibleTopMargin;
+    [self.copyButton setTitle:@"📋 复制日志" forState:UIControlStateNormal];
+    self.copyButton.titleLabel.font = [UIFont systemFontOfSize:15];
+    [self.copyButton addTarget:self action:@selector(copyLog) forControlEvents:UIControlEventTouchUpInside];
+    [self.errorView addSubview:self.copyButton];
     [self.view addSubview:self.errorView];
 }
 
@@ -101,7 +136,7 @@ static NSString *const KPCConsoleURL = @"http://127.0.0.1:19092/";
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     if (self.loadedOnce) return;
     self.errorView.hidden = NO;
-    self.errorLabel.text = [NSString stringWithFormat:@"无法连接 127.0.0.1:19092\n%@\n2 秒后自动重试…", error.localizedDescription];
+    [self showLog:[NSString stringWithFormat:@"无法连接 127.0.0.1:19092\n%@\n2 秒后自动重试…", error.localizedDescription]];
     [self performSelector:@selector(loadConsole) withObject:nil afterDelay:2.0];
 }
 
