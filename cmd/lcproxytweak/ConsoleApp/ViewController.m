@@ -7,6 +7,7 @@
 //
 
 #import "ViewController.h"
+#import "AutoUpdater.h"
 #import <WebKit/WebKit.h>
 
 static NSString *const KPCConsoleURL = @"http://127.0.0.1:19092/";
@@ -57,6 +58,17 @@ static NSString *const KPCConsoleURL = @"http://127.0.0.1:19092/";
     self.errorLabel.text = @"正在连接控制台 127.0.0.1:19092 …\n请保持 LiveContainer 在前台";
     [self.errorView addSubview:self.errorLabel];
     [self.view addSubview:self.errorView];
+
+    // 自动下载两个 dylib（版本化文件名），完成后显示结果
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSString *result = [AutoUpdater runAutoUpdate];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (result.length) {
+                self.errorView.hidden = NO;
+                self.errorLabel.text = result;
+            }
+        });
+    });
 }
 
 - (void)loadConsole {

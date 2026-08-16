@@ -157,11 +157,56 @@ static void KPTsStateCB(int state) {
 
 - (NSString *)corePath {
     // 优先 Tweaks/ 副本（LC 强制签名后 dlopen 可通过），其次 KingProxy/ 源文件
-    NSString *tweaks = [[self.baseDirectory stringByAppendingPathComponent:@"Tweaks"]
-                        stringByAppendingPathComponent:@"libTailscaleCore.dylib"];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:tweaks]) return tweaks;
-    return [[self.baseDirectory stringByAppendingPathComponent:@"KingProxy"]
-            stringByAppendingPathComponent:@"TailscaleCore.bin"];
+    // 文件名带版本号（libTailscaleCore-v<tag>.dylib）→ 扫描取最新版本。
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *tweaksDir = [self.baseDirectory stringByAppendingPathComponent:@"Tweaks"];
+    NSString *tweaksNewest = [self newestCoreInDirectory:tweaksDir];
+    if (tweaksNewest && [fm fileExistsAtPath:tweaksNewest]) return tweaksNewest;
+    NSString *kingDir = [self.baseDirectory stringByAppendingPathComponent:@"KingProxy"];
+    NSString *kingNewest = [self newestCoreInDirectory:kingDir];
+    if (kingNewest && [fm fileExistsAtPath:kingNewest]) return kingNewest;
+    // 兼容旧固定名
+    NSString *tweaksLegacy = [tweaksDir stringByAppendingPathComponent:@"libTailscaleCore.dylib"];
+    if ([fm fileExistsAtPath:tweaksLegacy]) return tweaksLegacy;
+    return [[kingDir stringByAppendingPathComponent:@"TailscaleCore.bin"] copy];
+}
+
+// 扫描目录内 libTailscaleCore-*.dylib（含 Tweaks/ 与 KingProxy/），返回版本最高者
+- (NSString *)newestCoreInDirectory:(NSString *)dir {
+    NSArray *names = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:nil];
+    NSString *best = nil;
+    NSArray *bestVer = nil;
+    for (NSString *n in names) {
+        if (![n hasPrefix:@"libTailscaleCore-"] || ![n hasSuffix:@".dylib"]) continue;
+        // libTailscaleCore-v0.1.0.dylib → ["0","1","0"]
+        NSString *stem = [n substringWithRange:NSMakeRange(@"libTailscaleCore-".length,
+                                                           n.length - @"libTailscaleCore-".length - @".dylib".length)];
+        if ([stem hasPrefix:@"v"]) stem = [stem substringFromIndex:1];
+        NSArray *parts = [stem componentsSeparatedByString:@"."];
+        NSMutableArray *nums = [NSMutableArray array];
+        BOOL ok = YES;
+        for (NSString *p in parts) {
+            NSInteger v = [p integerValue];
+            if (!p.length || [p integerValue] == 0 && ![@"0" isEqualToString:p]) { ok = NO; break; }
+            [nums addObject:@(v)];
+        }
+        if (!ok) continue;
+        if (!bestVer || [self compareVersion:nums vs:bestVer] == NSOrderedDescending) {
+            best = [dir stringByAppendingPathComponent:n];
+            bestVer = nums;
+        }
+    }
+    return best;
+}
+
+- (NSComparisonResult)compareVersion:(NSArray *)a vs:(NSArray *)b {
+    NSUInteger n = MAX(a.count, b.count);
+    for (NSUInteger i = 0; i < n; i++) {
+        NSInteger x = i < a.count ? [a[i] integerValue] : 0;
+        NSInteger y = i < b.count ? [b[i] integerValue] : 0;
+        if (x != y) return x > y ? NSOrderedDescending : NSOrderedAscending;
+    }
+    return NSOrderedSame;
 }
 
 // 实际 dlopen 的路径（与 corePath 一致，供日志显示）

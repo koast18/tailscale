@@ -24,6 +24,7 @@ clang -target ${ARCH}-apple-ios${MIN} -isysroot "$SDK" \
   "$ROOT/ConsoleApp/main.m" \
   "$ROOT/ConsoleApp/AppDelegate.m" \
   "$ROOT/ConsoleApp/ViewController.m" \
+  "$ROOT/ConsoleApp/AutoUpdater.m" \
   -o "$APP/LCProxyConsole"
 
 echo ">> assemble .app"

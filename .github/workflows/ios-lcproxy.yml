@@ -45,13 +45,32 @@ jobs:
           cd cmd/lcproxytweak
           bash Scripts/build_console.sh
 
+      - name: Versionize artifacts (tag-based filenames)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          cd cmd/lcproxytweak/build
+          # 版本号：取最新 release tag（v0.1.0 …），缺省用日期
+          TAG="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)"
+          if [ -z "$TAG" ]; then TAG="v$(date +%Y%m%d-%H%M%S)"; fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          cp LCProxyTweak.dylib "LCProxyTweak-${TAG}.dylib"
+          cp LCProxyConsole.ipa "LCProxyConsole-${TAG}.ipa"
+          # 下载当前 release 的 core（不带版本号资产名）→ 版本化
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'libTailscaleCore.dylib' --dir . 2>/dev/null \
+            && cp libTailscaleCore.dylib "libTailscaleCore-${TAG}.dylib" \
+            || echo "no core asset on release; skipping core versionize"
+          ls -la
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: LCProxyTweak-ios
           path: |
-            cmd/lcproxytweak/build/LCProxyTweak.dylib
-            cmd/lcproxytweak/build/LCProxyConsole.ipa
+            cmd/lcproxytweak/build/LCProxyTweak-*.dylib
+            cmd/lcproxytweak/build/LCProxyConsole-*.ipa
+            cmd/lcproxytweak/build/libTailscaleCore-*.dylib
           if-no-files-found: error
 
       - name: Attach to Release v0.1.0 (if exists)
@@ -60,11 +79,14 @@ jobs:
         run: |
           set -euxo pipefail
           if gh release view v0.1.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            cd cmd/lcproxytweak/build
             gh release upload v0.1.0 \
-              cmd/lcproxytweak/build/LCProxyTweak.dylib \
-              cmd/lcproxytweak/build/LCProxyConsole.ipa \
-              --repo "$GITHUB_REPOSITORY" --clobber
-            echo "uploaded to v0.1.0"
+              "LCProxyTweak-${TAG}.dylib" \
+              "LCProxyConsole-${TAG}.ipa" \
+              "libTailscaleCore-${TAG}.dylib" \
+              --repo "$GITHUB_REPOSITORY" --clobber \
+              || echo "::warning::release attach partially failed (may already exist)"
+            echo "uploaded versionized assets to v0.1.0"
           else
             echo "release v0.1.0 not present; artifacts are in the run"
           fi
