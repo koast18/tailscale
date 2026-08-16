@@ -170,7 +170,7 @@ jobs:
           }
           }
           EOF
-          clang -arch arm64 -isysroot "${SDK}" -mios-simulator-version-min=15.0 -fobjc-arc \
+          clang -arch arm64 -isysroot "${SDK}" -mios-simulator-version-min=15.0 -fobjc-arc -fmodules \
             -I "$APP" \
             /tmp/objc_test.m -framework UIKit -framework Foundation -framework CoreGraphics \
             -o "$APP/TsCoreObjCVerify"
