@@ -17,6 +17,8 @@
 static NSString *const KPAutoUpdateRepo = @"koast18/tailscale";
 static NSString *const KPAutoUpdateCoreNamePrefix = @"libTailscaleCore-";
 static NSString *const KPAutoUpdateTweakNamePrefix = @"LCProxyTweak-";
+// 镜像优先（中国大陆网络无法直连 GitHub 时可用），失败回退官方直连
+static NSString *const KPAutoUpdateMirrorPrefix = @"https://gh-proxy.com/";
 
 @implementation AutoUpdater
 
@@ -30,35 +32,71 @@ static NSString *const KPAutoUpdateTweakNamePrefix = @"LCProxyTweak-";
     return paths.firstObject ?: NSHomeDirectory();
 }
 
+// 依次尝试多个 URL，返回第一个 200 响应体（镜像优先，直连兜底）
++ (NSData *)fetchFirstSuccess:(NSArray<NSString *> *)urlStrings {
+    for (NSString *u in urlStrings) {
+        NSURL *url = [NSURL URLWithString:u];
+        if (!url) continue;
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+        req.timeoutInterval = 90;
+        [req setValue:@"LCProxyConsole/1.0" forHTTPHeaderField:@"User-Agent"];
+        NSHTTPURLResponse *resp = nil;
+        NSData *data = [NSURLConnection sendSynchronousRequest:req
+                                             returningResponse:&resp error:nil];
+        if (data && resp.statusCode == 200) {
+            return data;
+        }
+    }
+    return nil;
+}
+
 + (NSString *)latestReleaseTag {
-    NSURL *url = [NSURL URLWithString:
-        [NSString stringWithFormat:@"https://api.github.com/repos/%@/releases/latest", KPAutoUpdateRepo]];
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
-    req.timeoutInterval = 20;
-    [req setValue:@"LCProxyConsole/1.0" forHTTPHeaderField:@"User-Agent"];
-    NSHTTPURLResponse *resp = nil;
-    NSData *data = [NSURLConnection sendSynchronousRequest:req
-                                         returningResponse:&resp error:nil];
-    if (!data || resp.statusCode != 200) return nil;
+    // 镜像 → 直连，谁先 200 用谁
+    NSData *data = [self apiLatestRelease];
+    if (!data) return nil;
     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
     if (![json isKindOfClass:[NSDictionary class]]) return nil;
     NSString *tag = json[@"tag_name"];
     return tag.length ? tag : nil;
 }
 
-+ (BOOL)downloadAsset:(NSString *)assetName toPath:(NSString *)dst {
-    NSURL *url = [NSURL URLWithString:
-        [NSString stringWithFormat:@"https://github.com/%@/releases/latest/download/%@",
-                                   KPAutoUpdateRepo, assetName]];
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
-    req.timeoutInterval = 300; // core 20MB
-    [req setValue:@"LCProxyConsole/1.0" forHTTPHeaderField:@"User-Agent"];
-    NSHTTPURLResponse *resp = nil;
-    NSData *data = [NSURLConnection sendSynchronousRequest:req
-                                         returningResponse:&resp error:nil];
-    if (!data || resp.statusCode != 200) {
-        return NO;
+// api.github.com releases/latest 响应体（镜像优先）
++ (NSData *)apiLatestRelease {
+    NSArray *urls = @[
+        [NSString stringWithFormat:@"%@https://api.github.com/repos/%@/releases/latest",
+                                   KPAutoUpdateMirrorPrefix, KPAutoUpdateRepo],
+        [NSString stringWithFormat:@"https://api.github.com/repos/%@/releases/latest",
+                                   KPAutoUpdateRepo],
+    ];
+    return [self fetchFirstSuccess:urls];
+}
+
+// 从 latest release 的 assets 里找指定资产名 → browser_download_url（github.com/releases/download/...，可整体走镜像，无 302 链）
++ (NSString *)assetDownloadURL:(NSString *)assetName {
+    NSData *data = [self apiLatestRelease];
+    if (!data) return nil;
+    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![json isKindOfClass:[NSDictionary class]]) return nil;
+    NSArray *assets = json[@"assets"];
+    for (NSDictionary *a in assets) {
+        if ([a[@"name"] isEqualToString:assetName]) {
+            NSString *url = a[@"browser_download_url"];
+            return url.length ? url : nil;
+        }
     }
+    return nil;
+}
+
++ (BOOL)downloadAsset:(NSString *)assetName toPath:(NSString *)dst {
+    NSString *browser = [self assetDownloadURL:assetName];
+    if (!browser) return NO;
+    // 镜像 → 直连
+    NSArray *urls = @[
+        [NSString stringWithFormat:@"%@%@", KPAutoUpdateMirrorPrefix, browser],
+        browser,
+    ];
+    NSData *data = [self fetchFirstSuccess:urls];
+    if (!data) return NO;
     NSFileManager *fm = [NSFileManager defaultManager];
     [fm removeItemAtPath:dst error:nil];
     return [data writeToFile:dst atomically:YES];
