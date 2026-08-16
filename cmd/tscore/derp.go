@@ -89,8 +89,8 @@ func restoreDerpOnly() {
 // with the same value.
 //
 //export TsSetDerpOnly
-func TsSetDerpOnly(enable C.int) (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetDerpOnly: %v", p); rc = -1 } }()
+func TsSetDerpOnly(enable C.int) (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetDerpOnly: %v", p); tsRet = -1 } }()
 	v := enable != 0
 	if derpOnly.Load() == v {
 		return 0 // idempotent
@@ -119,8 +119,8 @@ func TsSetDerpOnly(enable C.int) (rc C.int) {
 }
 
 //export TsGetDerpOnly
-func TsGetDerpOnly() (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsGetDerpOnly: %v", p); rc = -1 } }()
+func TsGetDerpOnly() (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsGetDerpOnly: %v", p); tsRet = -1 } }()
 	if derpOnly.Load() {
 		return 1
 	}

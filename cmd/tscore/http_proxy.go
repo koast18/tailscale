@@ -35,8 +35,8 @@ var (
 )
 
 //export TsStartLocalHTTPProxy
-func TsStartLocalHTTPProxy(port C.int) (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsStartLocalHTTPProxy: %v", p); rc = -1 } }()
+func TsStartLocalHTTPProxy(port C.int) (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsStartLocalHTTPProxy: %v", p); tsRet = -1 } }()
 	httpProxyMu.Lock()
 	defer httpProxyMu.Unlock()
 	if httpProxy != nil {

@@ -61,8 +61,8 @@ type exitNodeInfo struct {
 }
 
 //export TsListExitNodes
-func TsListExitNodes() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsListExitNodes: %v", p); out = C.CString("") } }()
+func TsListExitNodes() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsListExitNodes: %v", p); tsRet = C.CString("") } }()
 	c, err := lc()
 	if err != nil {
 		return jstr(err)
@@ -96,8 +96,8 @@ func TsListExitNodes() (out *C.char) {
 }
 
 //export TsGetExitNodeStatus
-func TsGetExitNodeStatus() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsGetExitNodeStatus: %v", p); out = C.CString("") } }()
+func TsGetExitNodeStatus() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsGetExitNodeStatus: %v", p); tsRet = C.CString("") } }()
 	c, err := lc()
 	if err != nil {
 		return jstr(err)
@@ -115,8 +115,8 @@ func TsGetExitNodeStatus() (out *C.char) {
 }
 
 //export TsSuggestExitNode
-func TsSuggestExitNode() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSuggestExitNode: %v", p); out = C.CString("") } }()
+func TsSuggestExitNode() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSuggestExitNode: %v", p); tsRet = C.CString("") } }()
 	c, err := lc()
 	if err != nil {
 		return jstr(err)
@@ -155,8 +155,8 @@ func resolveExitNode(c *local.Client, ctx context.Context, nameOrIP string) (*ip
 }
 
 //export TsSetExitNode
-func TsSetExitNode(nameOrIP *C.char) (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetExitNode: %v", p); rc = -1 } }()
+func TsSetExitNode(nameOrIP *C.char) (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetExitNode: %v", p); tsRet = -1 } }()
 	if nameOrIP == nil {
 		return -1
 	}
@@ -184,8 +184,8 @@ func TsSetExitNode(nameOrIP *C.char) (rc C.int) {
 }
 
 //export TsClearExitNode
-func TsClearExitNode() (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsClearExitNode: %v", p); rc = -1 } }()
+func TsClearExitNode() (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsClearExitNode: %v", p); tsRet = -1 } }()
 	c, err := lc()
 	if err != nil {
 		tslogf("TsClearExitNode: %v", err)
@@ -203,8 +203,8 @@ func TsClearExitNode() (rc C.int) {
 }
 
 //export TsSetExitNodeAllowLANAccess
-func TsSetExitNodeAllowLANAccess(enable C.int) (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetExitNodeAllowLANAccess: %v", p); rc = -1 } }()
+func TsSetExitNodeAllowLANAccess(enable C.int) (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetExitNodeAllowLANAccess: %v", p); tsRet = -1 } }()
 	c, err := lc()
 	if err != nil {
 		tslogf("TsSetExitNodeAllowLANAccess: %v", err)
@@ -227,8 +227,8 @@ func TsSetExitNodeAllowLANAccess(enable C.int) (rc C.int) {
 // ---------------------------------------------------------------------------
 
 //export TsPing
-func TsPing(ip *C.char, pingType *C.char) (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsPing: %v", p); out = C.CString("") } }()
+func TsPing(ip *C.char, pingType *C.char) (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsPing: %v", p); tsRet = C.CString("") } }()
 	if ip == nil {
 		return jstr(errors.New("nil ip"))
 	}
@@ -266,8 +266,8 @@ func TsPing(ip *C.char, pingType *C.char) (out *C.char) {
 }
 
 //export TsNetcheck
-func TsNetcheck() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsNetcheck: %v", p); out = C.CString("") } }()
+func TsNetcheck() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsNetcheck: %v", p); tsRet = C.CString("") } }()
 	c, err := lc()
 	if err != nil {
 		return jstr(err)
@@ -287,8 +287,8 @@ func TsNetcheck() (out *C.char) {
 }
 
 //export TsDebugDERPRegion
-func TsDebugDERPRegion(regionCode *C.char) (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsDebugDERPRegion: %v", p); out = C.CString("") } }()
+func TsDebugDERPRegion(regionCode *C.char) (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsDebugDERPRegion: %v", p); tsRet = C.CString("") } }()
 	if regionCode == nil {
 		return jstr(errors.New("nil region code"))
 	}
@@ -306,8 +306,8 @@ func TsDebugDERPRegion(regionCode *C.char) (out *C.char) {
 }
 
 //export TsStatusDetailJSON
-func TsStatusDetailJSON() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsStatusDetailJSON: %v", p); out = C.CString("") } }()
+func TsStatusDetailJSON() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsStatusDetailJSON: %v", p); tsRet = C.CString("") } }()
 	c, err := lc()
 	if err != nil {
 		return jstr(err)
@@ -326,8 +326,8 @@ func TsStatusDetailJSON() (out *C.char) {
 // ---------------------------------------------------------------------------
 
 //export TsGetPrefsJSON
-func TsGetPrefsJSON() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsGetPrefsJSON: %v", p); out = C.CString("") } }()
+func TsGetPrefsJSON() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsGetPrefsJSON: %v", p); tsRet = C.CString("") } }()
 	c, err := lc()
 	if err != nil {
 		return jstr(err)
@@ -342,8 +342,8 @@ func TsGetPrefsJSON() (out *C.char) {
 }
 
 //export TsSetPrefsJSON
-func TsSetPrefsJSON(prefsJSON *C.char) (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetPrefsJSON: %v", p); rc = -1 } }()
+func TsSetPrefsJSON(prefsJSON *C.char) (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetPrefsJSON: %v", p); tsRet = -1 } }()
 	if prefsJSON == nil {
 		return -1
 	}
@@ -367,8 +367,8 @@ func TsSetPrefsJSON(prefsJSON *C.char) (rc C.int) {
 }
 
 //export TsSetHostname
-func TsSetHostname(name *C.char) (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetHostname: %v", p); rc = -1 } }()
+func TsSetHostname(name *C.char) (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetHostname: %v", p); tsRet = -1 } }()
 	if name == nil {
 		return -1
 	}
@@ -390,8 +390,8 @@ func TsSetHostname(name *C.char) (rc C.int) {
 }
 
 //export TsSetRouteAll
-func TsSetRouteAll(enable C.int) (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetRouteAll: %v", p); rc = -1 } }()
+func TsSetRouteAll(enable C.int) (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetRouteAll: %v", p); tsRet = -1 } }()
 	c, err := lc()
 	if err != nil {
 		tslogf("TsSetRouteAll: %v", err)
@@ -414,8 +414,8 @@ func TsSetRouteAll(enable C.int) (rc C.int) {
 // ---------------------------------------------------------------------------
 
 //export TsFileTargets
-func TsFileTargets() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsFileTargets: %v", p); out = C.CString("") } }()
+func TsFileTargets() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsFileTargets: %v", p); tsRet = C.CString("") } }()
 	c, err := lc()
 	if err != nil {
 		return jstr(err)
@@ -430,8 +430,8 @@ func TsFileTargets() (out *C.char) {
 }
 
 //export TsPushFile
-func TsPushFile(nodeID *C.char, name *C.char, dataBase64 *C.char, size C.int) (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsPushFile: %v", p); rc = -1 } }()
+func TsPushFile(nodeID *C.char, name *C.char, dataBase64 *C.char, size C.int) (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsPushFile: %v", p); tsRet = -1 } }()
 	if nodeID == nil || name == nil || dataBase64 == nil {
 		return -1
 	}
@@ -455,8 +455,8 @@ func TsPushFile(nodeID *C.char, name *C.char, dataBase64 *C.char, size C.int) (r
 }
 
 //export TsWaitingFiles
-func TsWaitingFiles() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsWaitingFiles: %v", p); out = C.CString("") } }()
+func TsWaitingFiles() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsWaitingFiles: %v", p); tsRet = C.CString("") } }()
 	c, err := lc()
 	if err != nil {
 		return jstr(err)
@@ -477,8 +477,8 @@ type waitingFileContent struct {
 }
 
 //export TsGetWaitingFile
-func TsGetWaitingFile(name *C.char) (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsGetWaitingFile: %v", p); out = C.CString("") } }()
+func TsGetWaitingFile(name *C.char) (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsGetWaitingFile: %v", p); tsRet = C.CString("") } }()
 	if name == nil {
 		return jstr(errors.New("nil name"))
 	}
@@ -505,8 +505,8 @@ func TsGetWaitingFile(name *C.char) (out *C.char) {
 }
 
 //export TsDeleteWaitingFile
-func TsDeleteWaitingFile(name *C.char) (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsDeleteWaitingFile: %v", p); rc = -1 } }()
+func TsDeleteWaitingFile(name *C.char) (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsDeleteWaitingFile: %v", p); tsRet = -1 } }()
 	if name == nil {
 		return -1
 	}
@@ -529,8 +529,8 @@ func TsDeleteWaitingFile(name *C.char) (rc C.int) {
 // ---------------------------------------------------------------------------
 
 //export TsTailscaleIPs
-func TsTailscaleIPs() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsTailscaleIPs: %v", p); out = C.CString("") } }()
+func TsTailscaleIPs() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsTailscaleIPs: %v", p); tsRet = C.CString("") } }()
 	c, err := lc()
 	if err != nil {
 		return jstr(err)
@@ -545,8 +545,8 @@ func TsTailscaleIPs() (out *C.char) {
 }
 
 //export TsWhoIs
-func TsWhoIs(ipOrAddr *C.char) (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsWhoIs: %v", p); out = C.CString("") } }()
+func TsWhoIs(ipOrAddr *C.char) (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsWhoIs: %v", p); tsRet = C.CString("") } }()
 	if ipOrAddr == nil {
 		return jstr(errors.New("nil addr"))
 	}
@@ -579,8 +579,8 @@ type peerInfo struct {
 }
 
 //export TsListPeers
-func TsListPeers() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsListPeers: %v", p); out = C.CString("") } }()
+func TsListPeers() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsListPeers: %v", p); tsRet = C.CString("") } }()
 	c, err := lc()
 	if err != nil {
 		return jstr(err)
@@ -616,8 +616,8 @@ func TsListPeers() (out *C.char) {
 // Returns {"loginName":""} when not logged in (no error).
 //
 //export TsCurrentUser
-func TsCurrentUser() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsCurrentUser: %v", p); out = C.CString("") } }()
+func TsCurrentUser() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsCurrentUser: %v", p); tsRet = C.CString("") } }()
 	c, err := lc()
 	if err != nil {
 		return jstr(currentUserJSON{})

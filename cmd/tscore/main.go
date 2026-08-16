@@ -226,8 +226,8 @@ func getSrv() (*tsnet.Server, error) {
 // persistence directory and hostname. It does not connect to the tailnet.
 //
 //export TsInit
-func TsInit(dir *C.char, hn *C.char) (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsInit: %v", p); rc = -1 } }()
+func TsInit(dir *C.char, hn *C.char) (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsInit: %v", p); tsRet = -1 } }()
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -278,8 +278,8 @@ func TsInit(dir *C.char, hn *C.char) (rc C.int) {
 // address/credentials are cached and the state callback fires with 2.
 //
 //export TsStart
-func TsStart() (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsStart: %v", p); rc = -1 } }()
+func TsStart() (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsStart: %v", p); tsRet = -1 } }()
 	s, err := getSrv()
 	if err != nil {
 		tslogf("TsStart: %v", err)
@@ -363,8 +363,8 @@ func TsStop() {
 }
 
 //export TsIsRunning
-func TsIsRunning() (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsIsRunning: %v", p); rc = -1 } }()
+func TsIsRunning() (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsIsRunning: %v", p); tsRet = -1 } }()
 	if currentState() == stateRunning {
 		return 1
 	}
@@ -376,8 +376,8 @@ func TsIsRunning() (rc C.int) {
 // it returns 0 immediately.
 //
 //export TsLogin
-func TsLogin(authKey *C.char) (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsLogin: %v", p); rc = -1 } }()
+func TsLogin(authKey *C.char) (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsLogin: %v", p); tsRet = -1 } }()
 	s, err := getSrv()
 	if err != nil {
 		tslogf("TsLogin: %v", err)
@@ -425,8 +425,8 @@ func TsLogin(authKey *C.char) (rc C.int) {
 const loginTimeout = 2 * time.Minute
 
 //export TsNeedsLogin
-func TsNeedsLogin() (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsNeedsLogin: %v", p); rc = -1 } }()
+func TsNeedsLogin() (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsNeedsLogin: %v", p); tsRet = -1 } }()
 	s, err := getSrv()
 	if err != nil {
 		return 1
@@ -449,8 +449,8 @@ func TsNeedsLogin() (rc C.int) {
 }
 
 //export TsLoginURL
-func TsLoginURL() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsLoginURL: %v", p); out = C.CString("") } }()
+func TsLoginURL() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsLoginURL: %v", p); tsRet = C.CString("") } }()
 	s, err := getSrv()
 	if err != nil {
 		return C.CString("")
@@ -473,8 +473,8 @@ func TsLoginURL() (out *C.char) {
 // dialing). Pass an empty string to clear.
 //
 //export TsSetHttpProxy
-func TsSetHttpProxy(proxyURL *C.char) (rc C.int) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetHttpProxy: %v", p); rc = -1 } }()
+func TsSetHttpProxy(proxyURL *C.char) (tsRet C.int) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSetHttpProxy: %v", p); tsRet = -1 } }()
 	if proxyURL == nil {
 		os.Unsetenv("HTTPS_PROXY")
 		return 0
@@ -493,8 +493,8 @@ func TsSetHttpProxy(proxyURL *C.char) (rc C.int) {
 }
 
 //export TsSocks5Addr
-func TsSocks5Addr() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSocks5Addr: %v", p); out = C.CString("") } }()
+func TsSocks5Addr() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSocks5Addr: %v", p); tsRet = C.CString("") } }()
 	mu.Lock()
 	a := socks5Addr
 	mu.Unlock()
@@ -502,8 +502,8 @@ func TsSocks5Addr() (out *C.char) {
 }
 
 //export TsSocks5Cred
-func TsSocks5Cred() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSocks5Cred: %v", p); out = C.CString("") } }()
+func TsSocks5Cred() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsSocks5Cred: %v", p); tsRet = C.CString("") } }()
 	mu.Lock()
 	c := socks5Cred
 	mu.Unlock()
@@ -518,8 +518,8 @@ func TsFreeString(p *C.char) {
 }
 
 //export TsVersion
-func TsVersion() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsVersion: %v", p); out = C.CString("") } }()
+func TsVersion() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsVersion: %v", p); tsRet = C.CString("") } }()
 	return C.CString(coreVersion)
 }
 
@@ -527,8 +527,8 @@ func TsVersion() (out *C.char) {
 // TsSetHttpProxy (possibly empty). Read-only, no side effects.
 //
 //export TsGetHttpProxy
-func TsGetHttpProxy() (out *C.char) {
-	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsGetHttpProxy: %v", p); out = C.CString("") } }()
+func TsGetHttpProxy() (tsRet *C.char) {
+	defer func() { if p := recover(); p != nil { tslogf("PANIC in TsGetHttpProxy: %v", p); tsRet = C.CString("") } }()
 	return C.CString(os.Getenv("HTTPS_PROXY"))
 }
 
