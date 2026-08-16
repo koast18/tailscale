@@ -69,11 +69,13 @@ cmd/tscore/
 ## Verification (GitHub Actions)
 
 - `.github/workflows/ios-dylib-cshared.yml` — builds the patched toolchain,
-  the c-shared dylib for the simulator + device, and runs a real host app
-  (`cmd/tscore/hostapp`) in a booted iPhone simulator via `simctl launch
-  --console`. **Result (iOS 18.5 simulator):**
+  the c-shared dylib for the simulator + device, validates the device dylib's
+  dlopen-readiness, and runs a real host app (`cmd/tscore/hostapp`) in a
+  booted **iOS 18.6 simulator** (`com.apple.CoreSimulator.SimRuntime.iOS-18-6`)
+  via `simctl launch --console`. **Result (run #31922548162):**
 
   ```
+  selected runtime: com.apple.CoreSimulator.SimRuntime.iOS-18-6
   OK dlopen
   OK dlsym TsEnsureInit/TsVersion/TsInit/TsIsRunning
   OK TsEnsureInit returned
@@ -83,14 +85,20 @@ cmd/tscore/
   VERIFY-PASS: dlopen OK, TsEnsureInit OK, exported calls OK
   ```
 
-  The same dylib also passes a native macOS dlopen test (TEST-PASS).
+  Device dylib dlopen-readiness (same run): dependencies are all system
+  images (`/usr/lib/libSystem.B.dylib`, CoreFoundation, Security,
+  libresolv — everything dyld resolves from the iOS shared cache), undefined
+  symbols only reference system frameworks, ad-hoc signature present, and
+  the ctor check passes: `__init_offsets` size 12 (plain) / 0 (lazy).
+  macOS native dlopen test also passes (TEST-PASS, diagnostic control).
 
 - `.github/workflows/ios-dylib-gomobile.yml` — `gomobile bind -target=ios
   -prefix TsCore` on `cmd/tscore/bind` (patched to use c-shared and to
   compile the generated Objective-C glue into the dylib), producing
   `TsCore.xcframework` whose binaries are dlopen-able dylibs with the `TsCore*`
-  ObjC classes inside; verified in the simulator by dlopening the dylib,
-  dlsym-ing the exported C entry points and calling ObjC methods:
+  ObjC classes inside; verified on the **iOS 18.6 simulator** by dlopening the
+  dylib, dlsym-ing the exported C entry points and calling ObjC methods
+  (run #31922934487):
 
   ```
   OBJCTEST-OK dlopen
@@ -105,7 +113,7 @@ cmd/tscore/
   **device** dylibs (plain + lazy, `-buildmode=c-shared`, iphoneos arm64),
   checks every expected symbol (`nm -gU` → **All 43 expected Ts* symbols
   exported**), assembles the `TsCoreVerify.ipa` host app, and publishes the
-  Release.
+  Release (run #31920789078).
 
 ## Integration (C ABI dylib)
 
