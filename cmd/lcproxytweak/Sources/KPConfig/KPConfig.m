@@ -173,4 +173,29 @@ NSDictionary *KPConfigDefaults(void) {
                              format:@"模式保存 tailscale=%@ king=%@", @(ts), @(king)];
 }
 
+/// 上游代理（免流网关或用户自己的翻墙代理）：conf.king.proxyHost / proxyPort
+- (NSString *)proxyHost {
+    NSDictionary *king = [self load][@"king"];
+    id v = king[@"proxyHost"];
+    return [v isKindOfClass:[NSString class]] && [v length] ? v : @"157.148.54.212";
+}
+
+- (int)proxyPort {
+    NSDictionary *king = [self load][@"king"];
+    id v = king[@"proxyPort"];
+    return [v isKindOfClass:[NSNumber class]] ? [v intValue] : 8091;
+}
+
+- (void)setProxyHost:(NSString *)host port:(int)port {
+    NSDictionary *cur = [self load];
+    NSMutableDictionary *merged = [self deepMutableCopy:cur];
+    NSMutableDictionary *kingDict = [NSMutableDictionary dictionaryWithDictionary:merged[@"king"] ?: @{}];
+    kingDict[@"proxyHost"] = host ?: @"157.148.54.212";
+    kingDict[@"proxyPort"] = @(port > 0 ? port : 8091);
+    merged[@"king"] = kingDict;
+    [self save:merged];
+    [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleConfig
+                             format:@"上游代理保存 %@:%d", host, port];
+}
+
 @end

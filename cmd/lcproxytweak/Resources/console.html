@@ -165,6 +165,12 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;background:var(--
     <div class="row"><span class="k">刷新来源/次数</span><span class="v" id="kg-source">…</span></div>
     <div class="row"><span class="k">取号路由</span><span class="v" id="kg-route">…</span></div>
     <div class="row"><span class="k">上游</span><span class="v" id="kg-upstream">…</span></div>
+    <details style="margin-top:6px"><summary class="dim">上游代理设置（默认王卡网关；填你自己的翻墙代理可让 Tailscale 登录）</summary>
+      <input type="text" id="kg-proxyhost" placeholder="代理地址，如 127.0.0.1" autocomplete="off">
+      <input type="text" id="kg-proxyport" placeholder="端口，如 7890 (Clash)" autocomplete="off">
+      <button id="btn-kg-proxy">保存并重启转发器</button>
+      <div class="msg dim">例：手机开着 Clash/Shadowrocket（本地代理 127.0.0.1:7890）→ 填 127.0.0.1 / 7890 → Tailscale 控制面走该代理，可正常登录。改回王卡：157.148.54.212 / 8091。</div>
+    </details>
     <button id="btn-kg-refresh">立即刷新凭证</button>
     <details style="margin-top:6px"><summary class="dim">手动覆盖凭证（可选）</summary>      <input type="text" id="kg-guid-input" placeholder="GUID（留空=自动）" autocomplete="off">
       <input type="password" id="kg-token-input" placeholder="TOKEN（留空=自动）">
@@ -267,6 +273,9 @@ async function loadStatus(){
   $("kg-source").textContent=(st.king.lastRefreshSource||"—")+" × "+(st.king.refreshCount||0);
   $("kg-route").textContent=st.king.lastFetchRoute||"—";
   $("kg-upstream").textContent=st.king.upstream||"—";
+  var upParts=(st.king&&st.king.upstream||"").split(":");
+  $("kg-proxyhost").value=upParts[0]||"";
+  $("kg-proxyport").value=upParts.length>1?upParts[1]:"";
   $("kg-link").textContent=st.kingEnabled?"免流开 → 强制 DERP-only":"—";
   $("kg-derp").textContent=st.derpOnly?"<span class='ok'>DERP-only 开启</span>":"P2P 允许";
   $("ft-status").textContent="已连接 · 模式 "+st.mode;
@@ -331,6 +340,15 @@ $("btn-kg-refresh").onclick=async()=>{
   $("kg-msg").textContent="刷新中…";
   const r=await api("/api/king/refresh",{method:"POST"});
   $("kg-msg").textContent=r.error?("失败: "+r.error):"刷新完成";
+  loadStatus();
+};
+
+$("btn-kg-proxy").onclick=async()=>{
+  const host=$("kg-proxyhost").value.trim()||"157.148.54.212";
+  const port=parseInt($("kg-proxyport").value.trim(),10)||8091;
+  $("kg-msg").textContent="保存中…";
+  const r=await api("/api/king",{method:"POST",body:JSON.stringify({proxyHost:host,proxyPort:port})});
+  $("kg-msg").textContent=r.error?("失败: "+r.error):"已保存（转发器+core 代理已重启）";
   loadStatus();
 };
 

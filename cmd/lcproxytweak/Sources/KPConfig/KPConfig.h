@@ -36,6 +36,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)kingEnabled;
 - (void)setTailscaleEnabled:(BOOL)ts kingEnabled:(BOOL)king;
 
+// 上游代理（免流网关或用户自己的翻墙代理）
+- (NSString *)proxyHost;
+- (int)proxyPort;
+- (void)setProxyHost:(NSString *)host port:(int)port;
+
 @end
 
 /// 默认配置

@@ -350,12 +350,26 @@ int const KPWebServerDefaultPort = 19092;
         if ([body[@"enabled"] isKindOfClass:[NSNumber class]]) king[@"enabled"] = body[@"enabled"];
         if ([body[@"guid"] isKindOfClass:[NSString class]]) king[@"guidOverride"] = body[@"guid"];
         if ([body[@"token"] isKindOfClass:[NSString class]]) king[@"tokenOverride"] = body[@"token"];
+        if ([body[@"proxyHost"] isKindOfClass:[NSString class]]) king[@"proxyHost"] = body[@"proxyHost"];
+        if ([body[@"proxyPort"] isKindOfClass:[NSNumber class]]) king[@"proxyPort"] = body[@"proxyPort"];
         NSMutableDictionary *merged = [NSMutableDictionary dictionaryWithDictionary:cur];
         merged[@"king"] = king;
         [cfg save:merged];
-        // 重新应用模式（联动）
+        // 重新应用模式（联动；会重启转发器与 core 代理设置）
         [[KPModeController shared] applyConfig:merged];
         return [weakSelf json:@{@"ok": @YES}];
+    }];
+
+    // 上游代理状态（供控制台显示当前 upstream）
+    [server addHandlerForMethod:@"GET" path:@"/api/upstream" requestClass:[GCDWebServerRequest class]
+                   processBlock:^GCDWebServerResponse *(GCDWebServerRequest *request) {
+        KPConfig *cfg = [KPConfig shared];
+        KPKingForwarder *king = [KPKingForwarder shared];
+        return [weakSelf json:@{
+            @"host": cfg.proxyHost,
+            @"port": @(cfg.proxyPort),
+            @"forwarderRunning": @([king isRunning]),
+        }];
     }];
 
     [server addHandlerForMethod:@"POST" path:@"/api/king/refresh" requestClass:[GCDWebServerDataRequest class]
