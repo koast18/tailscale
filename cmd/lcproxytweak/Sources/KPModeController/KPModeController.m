@@ -198,10 +198,20 @@ static NSString *const KPHookProxyKeyPass = @"pass";
             if (!addr.length && [[KPTsCore shared] coreInitialized]) addr = [[KPTsCore shared] socks5Addr];
             if (!cred.length && [[KPTsCore shared] coreInitialized]) cred = [[KPTsCore shared] socks5Cred];
             if (!addr.length) {
-                // SOCKS5 未就绪（tscore 初始化未完成/未提供地址）：不 hook，避免系统流量指向死端口黑洞
-                d[KPHookProxyKeyKind] = @(KPProxyKindNone);
-                [[KPLogger shared] logWithLevel:KPLogLevelWarn module:KPLogModuleMode
-                                         format:@"SOCKS5 未就绪（tscore 初始化未完成），暂不设置系统代理，避免流量黑洞"];
+                if (mode == KPModeA && [[KPKingForwarder shared] isRunning]) {
+                    // SOCKS5 未就绪（tailscale 未登录/未连上）：fallback 到免流转发器，
+                    // 保证流量仍走免流网关（浏览器查 IP 应是网关出口，而非本机 IP）。
+                    d[KPHookProxyKeyKind] = @(KPProxyKindHTTP);
+                    d[KPHookProxyKeyHost] = @"127.0.0.1";
+                    d[KPHookProxyKeyPort] = @(KPKingForwarderDefaultPort);
+                    [[KPLogger shared] logWithLevel:KPLogLevelWarn module:KPLogModuleMode
+                                             format:@"SOCKS5 未就绪 → fallback 免流转发器 :%d（流量走免流网关）", KPKingForwarderDefaultPort];
+                } else {
+                    // 模式B（tailscale-only）无免流可用：不 hook，避免指向死端口黑洞
+                    d[KPHookProxyKeyKind] = @(KPProxyKindNone);
+                    [[KPLogger shared] logWithLevel:KPLogLevelWarn module:KPLogModuleMode
+                                             format:@"SOCKS5 未就绪且无免流 fallback（模式B）：不设置系统代理"];
+                }
                 break;
             }
             NSString *host = @"127.0.0.1";
