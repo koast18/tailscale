@@ -29,6 +29,12 @@ clang -target ${ARCH}-apple-ios${MIN} -isysroot "$SDK" \
 
 echo ">> assemble .app"
 cp "$ROOT/ConsoleApp/Info.plist" "$APP/Info.plist"
+# 版本注入（唯一源 version.txt）
+VER="$(cat version.txt | tr -d ' 
+')"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" "$APP/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VER" "$APP/Info.plist"
+echo ">> Info.plist version=$VER"
 printf 'APPL????' > "$APP/PkgInfo"
 file "$APP/LCProxyConsole"
 

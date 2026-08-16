@@ -126,6 +126,8 @@ static NSString *const KPHookProxyKeyPass = @"pass";
                     }
                 });
                 int rc = [[KPTsCore shared] initCoreWithDirectory:dir hostname:hostname];
+                [[KPLogger shared] stepCheckModule:KPLogModuleTscore name:@"TsInit" ok:(rc == 0)
+                                             format:@"rc=%d dir=%@ host=%@", rc, dir, hostname];
                 int rc2 = [[KPTsCore shared] start];
                 [[KPLogger shared] stepCheckModule:KPLogModuleTscore name:@"TsStart" ok:(rc2 == 0)
                                              format:@"rc=%d", rc2];
@@ -198,9 +200,11 @@ static NSString *const KPHookProxyKeyPass = @"pass";
             if (!addr.length && [[KPTsCore shared] coreInitialized]) addr = [[KPTsCore shared] socks5Addr];
             if (!cred.length && [[KPTsCore shared] coreInitialized]) cred = [[KPTsCore shared] socks5Cred];
             if (!addr.length) {
-                if (mode == KPModeA && [[KPKingForwarder shared] isRunning]) {
+                if (mode == KPModeA) {
                     // SOCKS5 未就绪（tailscale 未登录/未连上）：fallback 到免流转发器，
                     // 保证流量仍走免流网关（浏览器查 IP 应是网关出口，而非本机 IP）。
+                    // 注意：不依赖 [[KPKingForwarder shared] isRunning]（模式切换时转发器异步启动中，
+                    // 该值必为 NO，会导致误判为“无 fallback”）；模式 A 定义即免流启用。
                     d[KPHookProxyKeyKind] = @(KPProxyKindHTTP);
                     d[KPHookProxyKeyHost] = @"127.0.0.1";
                     d[KPHookProxyKeyPort] = @(KPKingForwarderDefaultPort);

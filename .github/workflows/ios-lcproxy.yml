@@ -51,13 +51,17 @@ jobs:
         run: |
           set -euxo pipefail
           cd cmd/lcproxytweak/build
-          # 版本号：取最新 release tag（v0.1.0 …），缺省用日期
+          # 版本唯一源：cmd/lcproxytweak/version.txt（tweak 版本）。core 继续用 release tag。
+          VER="$(cat "$GITHUB_WORKSPACE/cmd/lcproxytweak/version.txt" | tr -d ' \r\n')"
+          if [ -z "$VER" ]; then echo "version.txt 为空" >&2; exit 1; fi
           TAG="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)"
           if [ -z "$TAG" ]; then TAG="v$(date +%Y%m%d-%H%M%S)"; fi
           echo "TAG=$TAG" >> "$GITHUB_ENV"
-          cp LCProxyTweak.dylib "LCProxyTweak-${TAG}.dylib"
-          cp LCProxyConsole.ipa "LCProxyConsole-${TAG}.ipa"
-          # 下载当前 release 的 core（不带版本号资产名）→ 版本化
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          echo ">> tweak version=$VER (core tag=$TAG)"
+          cp LCProxyTweak.dylib "LCProxyTweak-v${VER}.dylib"
+          cp LCProxyConsole.ipa "LCProxyConsole-v${VER}.ipa"
+          # 下载当前 release 的 core（不带版本号资产名）→ 版本化（沿用 tag）
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'libTailscaleCore.dylib' --dir . 2>/dev/null \
             && cp libTailscaleCore.dylib "libTailscaleCore-${TAG}.dylib" \
             || echo "no core asset on release; skipping core versionize"
@@ -80,7 +84,7 @@ jobs:
           set -euxo pipefail
           cd "$GITHUB_WORKSPACE"
           TAG="${{ env.TAG }}"
-          VERSION="$(grep -o '0\.[0-9]\+\.[0-9]\+' cmd/lcproxytweak/Sources/LCProxyTweak.m | head -1)"
+          VERSION="${{ env.VER }}"
           SIZE="$(stat -f%z cmd/lcproxytweak/build/LCProxyConsole-${TAG}.ipa)"
           NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           IPA_URL="https://gh-proxy.com/https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/LCProxyConsole-${TAG}.ipa"
@@ -153,8 +157,8 @@ jobs:
           if gh release view v0.1.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             cd cmd/lcproxytweak/build
             gh release upload v0.1.0 \
-              "LCProxyTweak-${TAG}.dylib" \
-              "LCProxyConsole-${TAG}.ipa" \
+              "LCProxyTweak-v${VER}.dylib" \
+              "LCProxyConsole-v${VER}.ipa" \
               "libTailscaleCore-${TAG}.dylib" \
               --repo "$GITHUB_REPOSITORY" --clobber \
               || echo "::warning::release attach partially failed (may already exist)"

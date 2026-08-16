@@ -12,12 +12,13 @@
 #import "KPKingForwarder.h"
 #import "KPWebServer.h"
 #import "KPHookManager.h"
+#import "Version.h"
 
 #import <UIKit/UIKit.h>
 #import <sys/utsname.h>
 #import <unistd.h>
 
-NSString *const KPTweakVersionString = @"0.2.14";
+NSString *const KPTweakVersionString = @KPTWEAK_VERSION;
 
 __attribute__((constructor))
 void LCProxyTweakConstructor(void) {

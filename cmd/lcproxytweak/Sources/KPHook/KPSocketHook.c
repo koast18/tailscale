@@ -8,6 +8,7 @@
 //
 
 #include "KPSocketHook.h"
+#include "Version.h"
 #include "KPFishhook.h"
 #include <dlfcn.h>
 #include <sys/socket.h>
@@ -166,7 +167,7 @@ static int kp_sock_connect_via_proxy(int fd, const char *host, int port) {
                      "Host: %s:%d\r\n"
                      "Q-GUID: %s\r\n"
                      "Q-Token: %s\r\n"
-                     "User-Agent: LCProxy/0.2.12\r\n"
+                     "User-Agent: " KPTWEAK_UA "\r\n"
                      "Connection: keep-alive\r\n\r\n",
                      host, port, host, port, guid, token);
     if (n <= 0 || n >= (int)sizeof(req)) return -1;

@@ -3,6 +3,7 @@
 //  LCProxyTweak
 //
 #include "KPKIngCore.h"
+#include "Version.h"
 #include "KPSocketHook.h"
 
 #include <ctype.h>
@@ -510,7 +511,7 @@ static int kp_do_fetch(int fd, const char *host, const char *path,
     snprintf(req, sizeof(req),
              "GET %s HTTP/1.0\r\n"
              "Host: %s\r\n"
-             "User-Agent: LCProxy/0.2.1\r\n"
+             "User-Agent: " KPTWEAK_UA "\r\n"
              "Accept-Encoding: identity\r\n"
              "Connection: close\r\n\r\n",
              path, host);
@@ -671,7 +672,7 @@ int kp_http_get_via_proxy(const char *upstream_host, int upstream_port,
     if (fd < 0) return -1;
     char req[512];
     snprintf(req, sizeof(req),
-             "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: LCProxy/0.2.12\r\nAccept: text/plain\r\nConnection: close\r\n\r\n",
+             "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: " KPTWEAK_UA "\r\nAccept: text/plain\r\nConnection: close\r\n\r\n",
              path, target_host);
     int rc = -1;
     if (kp_send_all(fd, req, strlen(req)) == 0) {
@@ -787,7 +788,7 @@ static int kp_login_via_absuri(const char *upstream_host, int upstream_port,
     snprintf(get, sizeof(get),
              "GET http://%s/ HTTP/1.0\r\n"
              "Host: %s\r\n"
-             "User-Agent: LCProxy/0.2.13\r\n"
+             "User-Agent: " KPTWEAK_UA "\r\n"
              "Connection: close\r\n\r\n",
              login_host, login_host);
     if (kp_send_all(fd, get, strlen(get)) == 0) {
