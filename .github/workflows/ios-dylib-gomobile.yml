@@ -108,7 +108,7 @@ jobs:
         continue-on-error: true
         run: |
           set -uxo pipefail
-          DEV=$(find dist/TsCore.xcframework -path '*ios-arm64*' -name 'TsCore' -type f | head -1)
+          DEV=$(find dist/TsCore.xcframework -path '*ios-arm64/TsCore.framework/TsCore' -type f | head -1)
           if [ -z "$DEV" ]; then echo "no device slice"; exit 0; fi
           cp "$DEV" dist/TsCoreObjC-device.dylib
           python3 cmd/tscore/tools/stripinits.py dist/TsCoreObjC-device.dylib 2>/dev/null || true
@@ -118,7 +118,7 @@ jobs:
       - name: Simulator dlopen test of ObjC dylib (host app)
         run: |
           set -uxo pipefail
-          SIM=$(find dist/TsCore.xcframework -path '*iossimulator*arm64*' -name 'TsCore' -type f | head -1)
+          SIM=$(find dist/TsCore.xcframework -path '*simulator*' -name 'TsCore' -type f | head -1)
           if [ -z "$SIM" ]; then echo "no simulator slice; skipping"; exit 0; fi
           echo "sim dylib: $SIM"
           cp "$SIM" dist/TsCoreObjC-sim.dylib
