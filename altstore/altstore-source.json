@@ -1,0 +1,29 @@
+{
+  "name": "LCProxy 源",
+  "identifier": "com.lcproxy.source",
+  "sourceURL": "https://gh-proxy.com/https://raw.githubusercontent.com/koast18/tailscale/main/altstore/altstore-source.json",
+  "apps": [
+    {
+      "name": "LCProxy 控制台",
+      "bundleIdentifier": "com.lcproxy.console",
+      "developerName": "koast18",
+      "version": "0.2.14",
+      "versionDate": "2026-08-16T06:53:09Z",
+      "versionDescription": "LCProxy 控制台（Tailscale + 免流代理）。打开自动下载两个 dylib。",
+      "downloadURL": "https://gh-proxy.com/https://github.com/koast18/tailscale/releases/download/v0.1.0/LCProxyConsole-v0.1.0.ipa",
+      "localizedDescription": "LiveContainer 内免流 + Tailscale 出口代理控制台。首次打开自动下载 core 与 tweak（带版本号文件名），LiveContainer 自动签名后重启生效。",
+      "iconURL": "https://cdn.jsdelivr.net/gh/koast18/tailscale@main/altstore/icon.png",
+      "tintColor": "2E7D32",
+      "size": 23512,
+      "versions": [
+        {
+          "version": "0.2.14",
+          "date": "2026-08-16T06:53:09Z",
+          "downloadURL": "https://gh-proxy.com/https://github.com/koast18/tailscale/releases/download/v0.1.0/LCProxyConsole-v0.1.0.ipa",
+          "localizedDescription": "上游代理设置 + 逐行调试日志 + 崩溃修复 + 登录不假完成"
+        }
+      ]
+    }
+  ],
+  "news": []
+}
