@@ -149,13 +149,19 @@ jobs:
           if (!h) { NSLog(@"OBJCTEST-FAIL dlopen: %s", dlerror()); return YES; }
           NSLog(@"OBJCTEST-OK dlopen");
           // Package-level Go functions are exported as C functions by gomobile
-          // (TsCoreTscorebindNewServer / TsCoreTscorebindVersionString), so
-          // resolve them via dlsym after dlopen.
+          // (TsCoreTscorebindNewServer / TsCoreTscorebindVersionString). Resolve
+          // them via dlsym after dlopen (do NOT link against them statically).
+          typedef TsCoreTscorebindServer* (*NewServerFn)(NSString*, NSString*, NSError**);
+          typedef NSString* (*VersionFn)(void);
+          NewServerFn newServerFn = (NewServerFn)dlsym(h, "TsCoreTscorebindNewServer");
+          VersionFn versionFn = (VersionFn)dlsym(h, "TsCoreTscorebindVersionString");
+          if (!newServerFn || !versionFn) { NSLog(@"OBJCTEST-FAIL dlsym: %s", dlerror()); return YES; }
+          NSLog(@"OBJCTEST-OK dlsym TsCoreTscorebindNewServer/VersionString");
           NSString *stateDir = [[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"tsstate"];
-          TsCoreTscorebindServer *srv = TsCoreTscorebindNewServer(stateDir, @"verify-objc", NULL);
+          TsCoreTscorebindServer *srv = newServerFn(stateDir, @"verify-objc", NULL);
           if (!srv) { NSLog(@"OBJCTEST-FAIL TsCoreTscorebindNewServer"); return YES; }
           NSLog(@"OBJCTEST-OK TsCoreTscorebindNewServer");
-          NSString *ver = TsCoreTscorebindVersionString();
+          NSString *ver = versionFn();
           NSLog(@"OBJCTEST-INFO versionString=%@", ver);
           BOOL running = [srv isRunning];
           NSLog(@"OBJCTEST-INFO isRunning=%d", (int)running);
