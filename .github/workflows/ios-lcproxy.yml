@@ -35,6 +35,14 @@ jobs:
           cd cmd/lcproxytweak
           bash Scripts/build_ios.sh
 
+      - name: Check WKProxyConfiguration API in SDK
+        run: |
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          echo "== Foundation NSURLSessionEndpoint =="
+          grep -rn "NSURLSessionEndpoint" "$SDK/System/Library/Frameworks/Foundation.framework/Headers/" 2>/dev/null | head -5 || echo "NOT FOUND in Foundation headers"
+          echo "== WebKit WKProxyConfiguration =="
+          grep -rn "WKProxyConfiguration" "$SDK/System/Library/Frameworks/WebKit.framework/Headers/" 2>/dev/null | head -8 || echo "NOT FOUND in WebKit headers"
+
       - name: Verify dylib
         run: |
           file cmd/lcproxytweak/build/LCProxyTweak.dylib

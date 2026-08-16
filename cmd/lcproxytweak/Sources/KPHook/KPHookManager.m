@@ -110,20 +110,47 @@ static id KPProxyConfigurationsForStore(id self, SEL _cmd) {
     NSString *host = cur[@"HTTPProxy"] ?: cur[@"SOCKSProxy"];
     NSNumber *port = cur[@"HTTPPort"] ?: cur[@"SOCKSPort"];
     if (!host || !port) return nil;
+    [[KPLogger shared] logWithLevel:KPLogLevelDebug module:KPLogModuleHook
+                             format:@"[hook] 构造 WKProxyConfiguration: host=%@ port=%@ (iOS %@)",
+                                    host, port, [[UIDevice currentDevice] systemVersion]];
     id endpoint = nil;
+    // NSURLSessionEndpoint（iOS 15.3+ 公开）：先试 initWithHost:port:，失败再试 endpointWithHost:port:
     SEL s1 = @selector(initWithHost:port:);
     if ([se instancesRespondToSelector:s1]) {
         id (*fn)(id, SEL, id, NSUInteger) = (void *)objc_msgSend;
         endpoint = fn([se alloc], s1, host, [port unsignedIntegerValue]);
+        [[KPLogger shared] logWithLevel:KPLogLevelDebug module:KPLogModuleHook
+                                 format:@"[hook] NSURLSessionEndpoint initWithHost:port: → %@", endpoint ? @"OK" : @"nil"];
     }
-    if (!endpoint) return nil;
+    if (!endpoint) {
+        SEL s1b = @selector(endpointWithHost:port:);
+        if ([se respondsToSelector:s1b]) {
+            id (*fn)(id, SEL, id, NSUInteger) = (void *)objc_msgSend;
+            endpoint = fn(se, s1b, host, [port unsignedIntegerValue]);
+            [[KPLogger shared] logWithLevel:KPLogLevelDebug module:KPLogModuleHook
+                                     format:@"[hook] NSURLSessionEndpoint endpointWithHost:port: → %@", endpoint ? @"OK" : @"nil"];
+        }
+    }
+    if (!endpoint) {
+        [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleHook
+                                 format:@"[hook] NSURLSessionEndpoint 构造失败（类=%@）→ WKWebView 代理不可用", se];
+        return nil;
+    }
     id config = nil;
     SEL s2 = @selector(initWithEndpoint:);
     if ([wpc instancesRespondToSelector:s2]) {
         id (*fn)(id, SEL, id) = (void *)objc_msgSend;
         config = fn([wpc alloc], s2, endpoint);
+        [[KPLogger shared] logWithLevel:KPLogLevelDebug module:KPLogModuleHook
+                                 format:@"[hook] WKProxyConfiguration initWithEndpoint: → %@", config ? @"OK" : @"nil"];
     }
-    if (!config) return nil;
+    if (!config) {
+        [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleHook
+                                 format:@"[hook] WKProxyConfiguration 构造失败（类=%@）→ WKWebView 代理不可用", wpc];
+        return nil;
+    }
+    [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleHook
+                             format:@"[hook] WKProxyConfiguration 就绪: %@:%@（WKWebView 将走此代理）", host, port];
     return @[config];
 }
 
