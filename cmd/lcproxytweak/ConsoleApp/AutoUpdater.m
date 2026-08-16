@@ -111,13 +111,36 @@ static BOOL gDownloadedNew = NO;
 }
 
 + (NSString *)lcRootDirectory {
+    // 探测可写共享根：LC_HOME_PATH 可能指向 LC 容器根（iOS 容器根不可写，
+    // 真正可写的 LC Documents 是其 /Documents 子目录）。依次候选：
+    //   1) LC_HOME_PATH            （已是 LC Documents 时命中）
+    //   2) LC_HOME_PATH/Documents   （LC_HOME_PATH = 容器根时命中，Tweaks 在其下）
+    //   3) 本 app NSDocumentDirectory（裸装/非 LC 环境回退）
+    // 每个候选尝试创建 Tweaks/ 目录，第一个成功的即为共享根。
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSMutableArray *candidates = [NSMutableArray array];
     const char *home = getenv("LC_HOME_PATH");
     if (home && home[0]) {
-        return [NSString stringWithUTF8String:home];
+        NSString *h = [NSString stringWithUTF8String:home];
+        [candidates addObject:h];
+        [candidates addObject:[h stringByAppendingPathComponent:@"Documents"]];
+        [self diag:@"[路径] LC_HOME_PATH=%@", h];
     }
-    // 回退：本 app 的 Documents（非 LC 环境时仅用于测试）
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    return paths.firstObject ?: NSHomeDirectory();
+    if (paths.count) [candidates addObject:paths[0]];
+
+    for (NSString *c in candidates) {
+        if (!c.length) continue;
+        NSString *probe = [c stringByAppendingPathComponent:@"Tweaks"];
+        NSError *err = nil;
+        if ([fm createDirectoryAtPath:probe withIntermediateDirectories:YES
+                            attributes:nil error:&err]) {
+            [self diag:@"[路径] 可写共享根: %@", c];
+            return c;
+        }
+        [self diag:@"[路径] 候选不可写 %@: %@", c, err.localizedDescription ?: @"?"];
+    }
+    return nil;
 }
 
 // 依次尝试多个 URL，返回第一个 200 响应体（镜像优先，直连兜底）；失败原因记录到诊断
