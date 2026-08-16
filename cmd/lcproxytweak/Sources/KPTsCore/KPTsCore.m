@@ -479,6 +479,22 @@ static void KPTsStateCB(int state) {
     }
 }
 
+- (NSDictionary *)syncLoginState {
+    __block NSString *url = nil;
+    __block int nl = 0, run = 0;
+    dispatch_sync([[self class] coreQueue], ^{
+        NSTimeInterval t0 = [NSDate timeIntervalSinceReferenceDate];
+        url = [self loginURL];
+        NSTimeInterval dt = [NSDate timeIntervalSinceReferenceDate] - t0;
+        [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleAuth
+                                 format:@"[login] syncLoginState: loginURL 耗时=%.2fs url=%@",
+                                        dt, url.length ? url : @"(空)"];
+        nl = [self needsLogin];
+        run = [self isRunning];
+    });
+    return @{@"url": url ?: @"", @"needsLogin": @(nl), @"running": @(run)};
+}
+
 #pragma mark - 代理 / DERP-only
 
 - (int)setHttpProxy:(NSString *)proxyURL {

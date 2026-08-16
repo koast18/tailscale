@@ -47,6 +47,10 @@ FOUNDATION_EXPORT NSNotificationName const KPTsCoreSocks5ChangedNotification;
 - (nullable NSString *)loginURL;
 - (int)isRunning;
 
+/// 在 coreQueue 上串行获取登录 URL（与 TsInit/TsStart 串行，避免 handler 线程直接进 cgo）；
+/// 返回 (url, needsLogin, isRunning) 元组；url 为空表示控制面握手未完成。
+- (NSDictionary *)syncLoginState;
+
 #pragma mark - 代理 / DERP-only
 
 - (int)setHttpProxy:(nullable NSString *)proxyURL;
