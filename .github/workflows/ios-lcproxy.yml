@@ -33,7 +33,7 @@ jobs:
       - name: Build tweak dylib
         run: |
           cd cmd/lcproxytweak
-          ./Scripts/build_ios.sh
+          bash Scripts/build_ios.sh
 
       - name: Verify dylib
         run: |
@@ -43,7 +43,7 @@ jobs:
       - name: Build console app (.ipa)
         run: |
           cd cmd/lcproxytweak
-          ./Scripts/build_console.sh
+          bash Scripts/build_console.sh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
