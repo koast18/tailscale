@@ -135,6 +135,7 @@ jobs:
           #import <UIKit/UIKit.h>
           #import <dlfcn.h>
           #import <objc/runtime.h>
+          #import "TsCore.h"   // generated gomobile headers (copied into the app dir)
           
           @interface AppDelegate : UIResponder <UIApplicationDelegate>
           @property(nonatomic, strong) UIWindow *window;
