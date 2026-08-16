@@ -3,9 +3,10 @@
 //  LCProxyConsole
 //
 //  安装 IPA 后打开 App 即自动从 GitHub Release 下载两个 dylib：
-//    - LCProxyTweak-<tag>.dylib        → <LC Documents>/Tweaks/   （LiveContainer TweakLoader 加载）
-//    - libTailscaleCore-<tag>.dylib    → <LC Documents>/KingProxy/ （tweak 的 KPTsCore 加载）
-//  文件名带版本号（GitHub Release 资产名即版本号）；下载完成后清理同前缀旧版本，
+//    - LCProxyTweak-v<version>.dylib   → <LC Documents>/Tweaks/   （LiveContainer TweakLoader 加载）
+//    - libTailscaleCore-v<version>.dylib → <LC Documents>/Tweaks/ （KPTsCore 扫描取最新版本加载）
+//  版本号来自 release 资产名（version.txt 驱动，见 .github/workflows/ios-lcproxy.yml）；
+//  扫描 assets 取版本号最大的资产下载（不依赖 release tag），下载完成后清理同前缀旧版本，
 //  保证 LiveContainer 里只有一个 tweak 实例。
 //
 //  定位 LC Documents：LiveContainer 把 LC 数据根暴露为环境变量 LC_HOME_PATH
@@ -189,6 +190,54 @@ static BOOL gDownloadedNew = NO;
     return [self fetchFirstSuccess:urls];
 }
 
+// 从 latest release assets 中选版本号最大的版本化资产（tweak/core 通用）。
+// 不依赖 release tag（tag 固定 v0.1.0，而资产名随 version.txt 变化——用 tag 拼名
+// 会命中旧的同名资产导致永不更新）。
++ (NSString *)latestVersionedAssetNameWithPrefix:(NSString *)prefix {
+    NSData *data = [self apiLatestRelease];
+    if (!data) return nil;
+    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![json isKindOfClass:[NSDictionary class]]) return nil;
+    NSArray *assets = json[@"assets"];
+    if (![assets isKindOfClass:[NSArray class]]) return nil;
+    NSString *best = nil;
+    NSArray *bestVer = nil;
+    NSMutableArray *seen = [NSMutableArray array];
+    for (NSDictionary *a in assets) {
+        NSString *name = a[@"name"];
+        if (![name isKindOfClass:[NSString class]]) continue;
+        [seen addObject:name];
+        if (![name hasPrefix:prefix] || ![name hasSuffix:@".dylib"]) continue;
+        NSString *verPart = [name substringFromIndex:prefix.length];
+        if (![verPart hasPrefix:@"v"]) continue;
+        verPart = [verPart substringFromIndex:1];
+        NSArray *parts = [verPart componentsSeparatedByString:@"."];
+        BOOL numeric = YES;
+        for (NSString *p in parts) {
+            int v = p.intValue;
+            if (p.length == 0 || (v == 0 && ![p isEqualToString:@"0"])) { numeric = NO; break; }
+        }
+        if (!numeric) continue;
+        if (!bestVer || [self versionArray:parts isNewerThan:bestVer]) {
+            best = name;
+            bestVer = parts;
+        }
+    }
+    [self diag:@"[资产] %@ 最新版本化资产=%@（可用: %@）", prefix,
+                    best ?: @"(无)", [seen componentsJoinedByString:@", "]];
+    return best;
+}
+
++ (BOOL)versionArray:(NSArray *)a isNewerThan:(NSArray *)b {
+    NSUInteger n = MAX(a.count, b.count);
+    for (NSUInteger i = 0; i < n; i++) {
+        int x = i < a.count ? [a[i] intValue] : 0;
+        int y = i < b.count ? [b[i] intValue] : 0;
+        if (x != y) return x > y;
+    }
+    return NO;
+}
+
 // 从 latest release 的 assets 里找指定资产名 → browser_download_url（github.com/releases/download/...，可整体走镜像，无 302 链）
 + (NSString *)assetDownloadURL:(NSString *)assetName {
     NSData *data = [self apiLatestRelease];
@@ -293,16 +342,23 @@ static BOOL gDownloadedNew = NO;
     };
 
     emit(@"获取最新版本…", -1);
-    NSString *tag = [self latestReleaseTag];
-    if (!tag.length) {
-        return [NSString stringWithFormat:@"获取最新版本失败\n\n%@", [self diagnostics]];
+    // 不依赖 release tag（tag 固定不变），而是扫描 assets 找版本号最大的资产。
+    NSString *tweakName = [self latestVersionedAssetNameWithPrefix:KPAutoUpdateTweakNamePrefix];
+    if (!tweakName.length) {
+        return [NSString stringWithFormat:@"未找到 tweak 资产（release 无 %@v*.dylib）\n\n%@",
+                        KPAutoUpdateTweakNamePrefix, [self diagnostics]];
     }
+    NSString *coreName = [self latestVersionedAssetNameWithPrefix:KPAutoUpdateCoreNamePrefix];
+    if (!coreName.length) {
+        return [NSString stringWithFormat:@"未找到 core 资产（release 无 %@v*.dylib）\n\n%@",
+                        KPAutoUpdateCoreNamePrefix, [self diagnostics]];
+    }
+    [self diag:@"[选择] tweak=%@ core=%@", tweakName, coreName];
 
     NSMutableArray *steps = [NSMutableArray array];
 
     // 1) tweak → Tweaks/（LiveContainer 检测到无签名会自动用用户证书 ZSign 重签，
     //    然后由 TweakLoader 加载）
-    NSString *tweakName = [NSString stringWithFormat:@"%@%@.dylib", KPAutoUpdateTweakNamePrefix, tag];
     NSString *tweakDst = [tweaksDir stringByAppendingPathComponent:tweakName];
     BOOL needTweak = ![fm fileExistsAtPath:tweakDst];
     if (needTweak) {
@@ -310,17 +366,16 @@ static BOOL gDownloadedNew = NO;
         if ([self downloadAsset:tweakName toPath:tweakDst
                        progress:^(double f) { emit(@"下载 tweak…", f); }]) {
             gDownloadedNew = YES;
-            [steps addObject:[NSString stringWithFormat:@"tweak %@ 已下载", tag]];
+            [steps addObject:[NSString stringWithFormat:@"tweak %@ 已下载", tweakName]];
         } else {
             return [NSString stringWithFormat:@"下载 tweak 失败: %@\n\n%@", tweakName, [self diagnostics]];
         }
     } else {
-        [steps addObject:[NSString stringWithFormat:@"tweak %@ 已存在", tag]];
+        [steps addObject:[NSString stringWithFormat:@"tweak %@ 已存在", tweakName]];
     }
 
     // 2) core → 同样放 Tweaks/（未签名无法 dlopen；与 tweak 一起被 LC 签名，
     //    KPTsCore 扫描 Tweaks/libTailscaleCore-*.dylib 取最新版本加载）
-    NSString *coreName = [NSString stringWithFormat:@"%@%@.dylib", KPAutoUpdateCoreNamePrefix, tag];
     NSString *coreDst = [tweaksDir stringByAppendingPathComponent:coreName];
     BOOL needCore = ![fm fileExistsAtPath:coreDst];
     if (needCore) {
@@ -328,12 +383,12 @@ static BOOL gDownloadedNew = NO;
         if ([self downloadAsset:coreName toPath:coreDst
                        progress:^(double f) { emit(@"下载 core（19.8MB）…", f); }]) {
             gDownloadedNew = YES;
-            [steps addObject:[NSString stringWithFormat:@"core %@ 已下载", tag]];
+            [steps addObject:[NSString stringWithFormat:@"core %@ 已下载", coreName]];
         } else {
             return [NSString stringWithFormat:@"下载 core 失败: %@\n\n%@", coreName, [self diagnostics]];
         }
     } else {
-        [steps addObject:[NSString stringWithFormat:@"core %@ 已存在", tag]];
+        [steps addObject:[NSString stringWithFormat:@"core %@ 已存在", coreName]];
     }
 
     // 3) 清理旧版本（Tweaks 下必须只留当前版 tweak，避免 TweakLoader 重复加载）

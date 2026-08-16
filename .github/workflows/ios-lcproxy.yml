@@ -61,9 +61,9 @@ jobs:
           echo ">> tweak version=$VER (core tag=$TAG)"
           cp LCProxyTweak.dylib "LCProxyTweak-v${VER}.dylib"
           cp LCProxyConsole.ipa "LCProxyConsole-v${VER}.ipa"
-          # 下载当前 release 的 core（不带版本号资产名）→ 版本化（沿用 tag）
+          # 下载当前 release 的 core（不带版本号资产名）→ 版本化（与 tweak 同版本节奏，保证新 core 被 AutoUpdater 下载）
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'libTailscaleCore.dylib' --dir . 2>/dev/null \
-            && cp libTailscaleCore.dylib "libTailscaleCore-${TAG}.dylib" \
+            && cp libTailscaleCore.dylib "libTailscaleCore-v${VER}.dylib" \
             || echo "no core asset on release; skipping core versionize"
           ls -la
 
@@ -159,7 +159,7 @@ jobs:
             gh release upload v0.1.0 \
               "LCProxyTweak-v${VER}.dylib" \
               "LCProxyConsole-v${VER}.ipa" \
-              "libTailscaleCore-${TAG}.dylib" \
+              "libTailscaleCore-v${VER}.dylib" \
               --repo "$GITHUB_REPOSITORY" --clobber \
               || echo "::warning::release attach partially failed (may already exist)"
             echo "uploaded versionized assets to v0.1.0"
