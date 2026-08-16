@@ -5,6 +5,7 @@
 
 #import "LCProxyTweak.h"
 #import "KPLogger.h"
+#import "KPCrashCatcher.h"
 #import "KPConfig.h"
 #import "KPModeController.h"
 #import "KPTsCore.h"
@@ -31,6 +32,9 @@ void LCProxyTweakConstructor(void) {
         NSString *iosVer = [[UIDevice currentDevice] systemVersion] ?: @"?";
         NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier] ?: @"?";
         pid_t pid = getpid();
+
+        // 崩溃捕获最先安装：后续任何闪退都会留下 crash-*.log（含堆栈）
+        [KPCrashCatcher install];
 
         [logger stepCheckModule:KPLogModuleBoot name:@"tweak 载入" ok:YES
                          format:@"LCProxyTweak v%@ pid=%d", KPTweakVersionString, (int)pid];

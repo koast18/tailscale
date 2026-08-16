@@ -322,61 +322,65 @@ int const KPWebServerDefaultPort = 19092;
     }];
 
     [server addHandlerForMethod:@"POST" path:@"/api/ipcheck" requestClass:[GCDWebServerDataRequest class]
-                   processBlock:^GCDWebServerResponse *(GCDWebServerRequest *request) {
+              asyncProcessBlock:^(GCDWebServerRequest *request, GCDWebServerCompletionBlock completionBlock) {
+        // 异步执行：CONNECT 检测最多 2×8s，不在 GCDWebServer 请求线程上阻塞（否则其他 API 全部排队"无返回"）
         KPKingForwarder *king = [KPKingForwarder shared];
         NSString *proxyHost = king.proxyHostFromConfig;
         int proxyPort = king.proxyPortFromConfig;
         NSString *guid = king.guid;
         NSString *token = king.token;
         [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleKing
-                                 format:@"[ipcheck] 开始: 上游=%@:%d guid=%@ token=%c…",
+                                 format:@"[ipcheck] 开始(异步): 上游=%@:%d guid=%@ token=%c…",
                                         proxyHost, proxyPort, guid,
                                         token.length ? [token characterAtIndex:0] : '?'];
         if (!guid.length || !token.length) {
             [[KPLogger shared] logWithLevel:KPLogLevelWarn module:KPLogModuleKing
                                      format:@"[ipcheck] 无凭证，拒绝（先取号）"];
-            return [self jsonError:@"无凭证：请先取号（立即刷新凭证）" statusCode:409];
+            completionBlock([self jsonError:@"无凭证：请先取号（立即刷新凭证）" statusCode:409]);
+            return;
         }
-        // 经免流网关 CONNECT 到 IP 服务，取出口 IP
-        static const char *targets[][3] = {
-            {"checkip.amazonaws.com", "80", "/"},
-            {"api.ipify.org", "80", "/"},
-        };
-        NSString *ip = nil;
-        NSString *lastDiag = @"";
-        for (size_t i = 0; i < 2 && !ip; i++) {
-            char body[1024] = {0};
-            char recent[4096] = {0};
-            NSTimeInterval t0 = [NSDate timeIntervalSinceReferenceDate];
-            [[KPLogger shared] logWithLevel:KPLogLevelDebug module:KPLogModuleKing
-                                     format:@"[ipcheck] target[%zu]=%s%s 开始…", i, targets[i][0], targets[i][2]];
-            int rc = kp_http_get_via_proxy(proxyHost.UTF8String, proxyPort,
-                                           targets[i][0], atoi(targets[i][1]), targets[i][2],
-                                           guid.UTF8String, token.UTF8String,
-                                           10000, body, sizeof(body));
-            NSTimeInterval dt = [NSDate timeIntervalSinceReferenceDate] - t0;
-            kp_debug_recent(recent, sizeof(recent));
-            lastDiag = [NSString stringWithUTF8String:recent] ?: @"";
-            NSString *s = [@(body) stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            static const char *targets[][3] = {
+                {"checkip.amazonaws.com", "80", "/"},
+                {"api.ipify.org", "80", "/"},
+            };
+            NSString *ip = nil;
+            NSString *lastDiag = @"";
+            for (size_t i = 0; i < 2 && !ip; i++) {
+                char body[1024] = {0};
+                char recent[4096] = {0};
+                NSTimeInterval t0 = [NSDate timeIntervalSinceReferenceDate];
+                [[KPLogger shared] logWithLevel:KPLogLevelDebug module:KPLogModuleKing
+                                         format:@"[ipcheck] target[%zu]=%s%s 开始…", i, targets[i][0], targets[i][2]];
+                int rc = kp_http_get_via_proxy(proxyHost.UTF8String, proxyPort,
+                                               targets[i][0], atoi(targets[i][1]), targets[i][2],
+                                               guid.UTF8String, token.UTF8String,
+                                               8000, body, sizeof(body));
+                NSTimeInterval dt = [NSDate timeIntervalSinceReferenceDate] - t0;
+                kp_debug_recent(recent, sizeof(recent));
+                lastDiag = [NSString stringWithUTF8String:recent] ?: @"";
+                NSString *s = [@(body) stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleKing
+                                         format:@"[ipcheck] target[%zu]=%s rc=%d 耗时=%.1fs body=%@",
+                                                i, targets[i][0], rc, dt, s.length ? s : @"(空)"];
+                if (rc == 0 && s.length >= 7) ip = s;
+            }
+            if (!ip) {
+                NSString *msg = [NSString stringWithFormat:@"出口检测失败\n%@", lastDiag];
+                [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleKing
+                                         format:@"[ipcheck] 全部失败: %@", msg];
+                completionBlock([self jsonError:msg statusCode:502]);
+                return;
+            }
             [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleKing
-                                     format:@"[ipcheck] target[%zu]=%s rc=%d 耗时=%.1fs body=%@",
-                                            i, targets[i][0], rc, dt, s.length ? s : @"(空)"];
-            if (rc == 0 && s.length >= 7) ip = s; // 粗校验像 IP
-        }
-        if (!ip) {
-            NSString *msg = [NSString stringWithFormat:@"出口检测失败\n%@", lastDiag];
-            [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleKing
-                                     format:@"[ipcheck] 全部失败: %@", msg];
-            return [self jsonError:msg statusCode:502];
-        }
-        [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleKing
-                                 format:@"[ipcheck] 成功 ip=%@ via=proxy", ip];
-        return [self json:@{
-            @"ok": @YES,
-            @"ip": ip,
-            @"via": @"proxy",
-            @"at": [self nowString],
-        }];
+                                     format:@"[ipcheck] 成功 ip=%@ via=proxy", ip];
+            completionBlock([self json:@{
+                @"ok": @YES,
+                @"ip": ip,
+                @"via": @"proxy",
+                @"at": [self nowString],
+            }]);
+        });
     }];
 
     [server addHandlerForMethod:@"GET" path:@"/api/king/status" requestClass:[GCDWebServerRequest class]
