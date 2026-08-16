@@ -73,6 +73,74 @@ jobs:
             cmd/lcproxytweak/build/libTailscaleCore-*.dylib
           if-no-files-found: error
 
+      - name: Publish AltStore-style source (fixed URL)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          cd "$GITHUB_WORKSPACE"
+          TAG="${{ env.TAG }}"
+          VERSION="$(grep -o '0\.[0-9]\+\.[0-9]\+' cmd/lcproxytweak/Sources/LCProxyTweak.m | head -1)"
+          SIZE="$(stat -f%z cmd/lcproxytweak/build/LCProxyConsole-${TAG}.ipa)"
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          IPA_URL="https://gh-proxy.com/https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/LCProxyConsole-${TAG}.ipa"
+          ICON_URL="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/altstore/icon.png"
+          mkdir -p altstore
+          python3 - "$TAG" "$VERSION" "$SIZE" "$NOW" "$IPA_URL" "$ICON_URL" > altstore/altstore-source.json <<'EOF'
+          import json, sys
+          tag, ver, size, now, ipa, icon = sys.argv[1:]
+          src = {
+              "name": "LCProxy 源",
+              "identifier": "com.lcproxy.source",
+              "sourceURL": "https://gh-proxy.com/https://raw.githubusercontent.com/koast18/tailscale/main/altstore/altstore-source.json",
+              "apps": [{
+                  "name": "LCProxy 控制台",
+                  "bundleIdentifier": "com.lcproxy.console",
+                  "developerName": "koast18",
+                  "version": ver,
+                  "versionDate": now,
+                  "versionDescription": "LCProxy 控制台（Tailscale + 免流代理）。打开自动下载两个 dylib。",
+                  "downloadURL": ipa,
+                  "localizedDescription": "LiveContainer 内免流 + Tailscale 出口代理控制台。首次打开自动下载 core 与 tweak（带版本号文件名），LiveContainer 自动签名后重启生效。",
+                  "iconURL": icon,
+                  "tintColor": "2E7D32",
+                  "size": int(size),
+                  "versions": [{"version": ver, "date": now, "downloadURL": ipa,
+                                "localizedDescription": "上游代理设置 + 逐行调试日志 + 崩溃修复 + 登录不假完成"}],
+              }],
+              "news": [],
+          }
+          json.dump(src, sys.stdout, ensure_ascii=False, indent=2)
+          EOF
+          # 图标（180x180 纯色 PNG，python zlib 生成，无外部依赖）
+          python3 - <<'EOF'
+          import struct, zlib
+          w = h = 180
+          rows = []
+          for y in range(h):
+              row = b'\x00'
+              for x in range(w):
+                  if 40 < x < 140 and 40 < y < 140:
+                      row += bytes((46, 125, 50, 255))
+                  else:
+                      row += bytes((20, 24, 30, 255))
+              rows.append(row)
+          raw = b''.join(rows)
+          def chunk(t, d):
+              c = struct.pack('>I', len(d)) + t + d
+              return c + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+          png = b'\x89PNG\r\n\x1a\n'
+          png += chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 6, 0, 0, 0))
+          png += chunk(b'IDAT', zlib.compress(raw))
+          png += chunk(b'IEND', b'')
+          open('altstore/icon.png', 'wb').write(png)
+          EOF
+          git add altstore/altstore-source.json altstore/icon.png
+          git -c user.name="ci" -c user.email="ci@local" commit -m "altstore: update source v${VERSION} [skip ci]" || echo "(no change)"
+          git push origin main 2>&1 | tail -2
+          echo "=== published source ==="
+          cat altstore/altstore-source.json | head -20
+
       - name: Attach to Release v0.1.0 (if exists)
         env:
           GH_TOKEN: ${{ github.token }}

@@ -145,9 +145,14 @@ static NSString *const KPHookProxyKeyPass = @"pass";
             });
         }
     } else {
-        [[KPTsCore shared] unload];
-        [[KPLogger shared] stepCheckModule:KPLogModuleTscore name:@"core 卸载(模式C/D不加载)"
-                                       ok:YES format:@""];
+        // unload 也走 coreQueue 串行：避免与后台 TsInit/TsStart 竞争（正在运行的 dylib 被 dlclose 会闪退）
+        dispatch_async([KPTsCore coreQueue], ^{
+            [[KPTsCore shared] unload];
+            [[KPLogger shared] stepCheckModule:KPLogModuleTscore name:@"core 卸载(模式C/D不加载)"
+                                           ok:YES format:@""];
+        });
+        [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleTscore
+                                 format:@"core 卸载已入队(模式C/D不加载)"];
     }
 
     // king 侧：转发器启停（启动为异步，成功与否由 KPKingForwarder 内部日志确认）

@@ -328,7 +328,11 @@ static void KPTsStateCB(int state) {
         self.handle = NULL;
         self.loaded = NO;
         self.coreInitialized = NO;
-        [[KPLogger shared] stepCheckModule:KPLogModuleTscore name:@"卸载 core" ok:YES format:@""];
+        // 全部函数指针清零，防止 dlclose 后野指针调用闪退
+        for (NSString *name in self.symbolNames) {
+            [self setSymbol:NULL forName:name];
+        }
+        [[KPLogger shared] stepCheckModule:KPLogModuleTscore name:@"卸载 core" ok:YES format:@"(已清零 %lu 个符号)", (unsigned long)self.symbolNames.count];
     }
 }
 

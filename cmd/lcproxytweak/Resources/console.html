@@ -230,9 +230,16 @@ const $=id=>document.getElementById(id);
 let state={};
 
 async function api(path,opts){
-  const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});
+  let r=null;
+  try{
+    r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});
+  }catch(e){
+    return {error:"请求失败(后端未响应): "+e};
+  }
+  if(!r) return {error:"后端无响应(null)"};
   let j=null; try{j=await r.json()}catch(e){}
   if(!r.ok) return {error:(j&&(j.error||j.message))||("HTTP "+r.status)};
+  if(j===null) return {error:"后端返回空响应(可能崩溃)"};
   return j;
 }
 function fmtBool(b){return b?"<span class='ok'>✓ 是</span>":"<span class='bad'>✗ 否</span>";}
