@@ -34,7 +34,36 @@ static NSString *const KPCConsoleURL = @"http://127.0.0.1:19092/";
     [self.view addSubview:self.webView];
 
     [self setupErrorView];
-    [self loadConsole];
+
+    // 阶段一：初始化（自动下载两个 dylib）。完成之前不连接 19092 ——
+    // tweak 未就绪时连控制台没有意义，且错误信息会被冲掉。
+    [self startAutoUpdate];
+}
+
+- (void)startAutoUpdate {
+    self.errorView.hidden = NO;
+    self.errorLabel.text = @"正在初始化（下载两个 dylib）…\n请保持 LiveContainer 在前台";
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSString *result = [AutoUpdater runAutoUpdate];
+        BOOL downloaded = [AutoUpdater downloadedAnything];
+        BOOL failed = result.length > 0 && [result containsString:@"失败"];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.errorView.hidden = NO;
+            if (failed || downloaded) {
+                // 下载完成（或失败）：全量信息上屏，不连 19092，等用户重启
+                NSString *msg = result ?: @"（无输出）";
+                if (!failed) {
+                    msg = [msg stringByAppendingString:@"\n\n请退出 App 重新打开（或重启 LiveContainer），tweak 签名生效后自动进入控制台。"];
+                }
+                self.errorLabel.text = msg;
+                self.spinner.hidden = YES;
+            } else {
+                // 两个 dylib 都已存在（重启后的再次打开）：直接连控制台
+                self.errorLabel.text = @"正在连接控制台 127.0.0.1:19092 …";
+                [self loadConsole];
+            }
+        });
+    });
 }
 
 - (void)setupErrorView {
@@ -55,20 +84,9 @@ static NSString *const KPCConsoleURL = @"http://127.0.0.1:19092/";
     self.errorLabel.numberOfLines = 0;
     self.errorLabel.textColor = [UIColor colorWithWhite:0.75 alpha:1];
     self.errorLabel.font = [UIFont systemFontOfSize:15];
-    self.errorLabel.text = @"正在连接控制台 127.0.0.1:19092 …\n请保持 LiveContainer 在前台";
+    self.errorLabel.text = @"正在初始化（下载两个 dylib）…\n请保持 LiveContainer 在前台";
     [self.errorView addSubview:self.errorLabel];
     [self.view addSubview:self.errorView];
-
-    // 自动下载两个 dylib（版本化文件名），完成后显示结果
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSString *result = [AutoUpdater runAutoUpdate];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (result.length) {
-                self.errorView.hidden = NO;
-                self.errorLabel.text = result;
-            }
-        });
-    });
 }
 
 - (void)loadConsole {

@@ -24,6 +24,11 @@ static NSString *const KPAutoUpdateMirrorPrefix = @"https://gh-proxy.com/";
 
 // 诊断记录：每次网络尝试的 URL / 状态码 / 错误，失败时随错误信息上屏
 static NSMutableString *gDiag = nil;
+static BOOL gDownloadedNew = NO;
+
++ (BOOL)downloadedAnything {
+    return gDownloadedNew;
+}
 
 + (void)diag:(NSString *)fmt, ... {
     if (!gDiag) gDiag = [NSMutableString string];
@@ -157,6 +162,7 @@ static NSMutableString *gDiag = nil;
 /// 自动更新入口：返回状态描述（无网络时返回 nil）
 + (nullable NSString *)runAutoUpdate {
     [self resetDiagnostics];
+    gDownloadedNew = NO;
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *root = [self lcRootDirectory];
     if (!root.length) return @"无法定位 LiveContainer 目录";
@@ -179,6 +185,7 @@ static NSMutableString *gDiag = nil;
     BOOL needTweak = ![fm fileExistsAtPath:tweakDst];
     if (needTweak) {
         if ([self downloadAsset:tweakName toPath:tweakDst]) {
+            gDownloadedNew = YES;
             [steps addObject:[NSString stringWithFormat:@"tweak %@ 已下载", tag]];
         } else {
             return [NSString stringWithFormat:@"下载 tweak 失败: %@\n\n%@", tweakName, [self diagnostics]];
@@ -194,6 +201,7 @@ static NSMutableString *gDiag = nil;
     BOOL needCore = ![fm fileExistsAtPath:coreDst];
     if (needCore) {
         if ([self downloadAsset:coreName toPath:coreDst]) {
+            gDownloadedNew = YES;
             [steps addObject:[NSString stringWithFormat:@"core %@ 已下载", tag]];
         } else {
             return [NSString stringWithFormat:@"下载 core 失败: %@\n\n%@", coreName, [self diagnostics]];
