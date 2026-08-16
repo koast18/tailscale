@@ -112,7 +112,7 @@ static id KPProxyConfigurationsForStore(id self, SEL _cmd) {
     if (!host || !port) return nil;
     [[KPLogger shared] logWithLevel:KPLogLevelDebug module:KPLogModuleHook
                              format:@"[hook] 构造 WKProxyConfiguration: host=%@ port=%@ (iOS %@)",
-                                    host, port, [[UIDevice currentDevice] systemVersion]];
+                                    host, port, [[NSProcessInfo processInfo] operatingSystemVersionString]];
     id endpoint = nil;
     // NSURLSessionEndpoint（iOS 15.3+ 公开）：先试 initWithHost:port:，失败再试 endpointWithHost:port:
     SEL s1 = @selector(initWithHost:port:);
