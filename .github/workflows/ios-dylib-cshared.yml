@@ -64,27 +64,27 @@ jobs:
           mkdir -p /tmp/probe/nocgo /tmp/probe/cgo
           cat > /tmp/probe/nocgo/go.mod <<'EOF'
           module nocgo
-          
+
           go 1.26.6
           EOF
           cat > /tmp/probe/nocgo/main.go <<'EOF'
           package main
-          
+
           func main() {}
           EOF
           cat > /tmp/probe/cgo/go.mod <<'EOF'
           module cgo
-          
+
           go 1.26.6
           EOF
           cat > /tmp/probe/cgo/main.go <<'EOF'
           package main
-          
+
           import "C"
-          
+
           //export Probe
           func Probe() *C.char { return C.CString("x") }
-          
+
           func main() {}
           EOF
           echo "=== A) c-shared, NO cgo: link? ctor? ==="
@@ -156,6 +156,47 @@ jobs:
           echo "--- device Ts* count ---"
           nm -gU dist/TsCore-cshared-device.dylib 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | grep -c '^Ts' || true
 
+      - name: Device dylib dlopen-readiness validation
+        run: |
+          set -uxo pipefail
+          D="dist/TsCore-cshared-device.dylib"
+          if [ ! -f "$D" ]; then echo "no device dylib; skipping"; exit 0; fi
+          echo "=== LC_LOAD_DYLIB dependencies (must all be system frameworks/lib) ==="
+          otool -L "$D" | sed -n '2,20p'
+          echo "=== undefined symbols (may only reference system dyld cache) ==="
+          nm -u "$D" | head -10 || echo "(none)"
+          echo "=== undefined count ==="
+          nm -u "$D" | wc -l
+          echo "=== code signature ==="
+          codesign -dv --verbose=2 "$D" 2>&1 | head -6 || true
+          echo "=== build version / min OS ==="
+          vtool -show-build "$D" 2>/dev/null || otool -l "$D" | grep -A4 LC_BUILD_VERSION | head -8
+          echo "=== initializer entry (plain) must be non-empty ==="
+          python3 - <<'EOF'
+          import struct
+          for path in ("dist/TsCore-cshared-device.dylib", "dist/TsCore-cshared-device-lazy.dylib"):
+          data = open(path, "rb").read()
+          ncmds = struct.unpack("<I", data[16:20])[0]
+          off = 32
+          inits = []
+          for _ in range(ncmds):
+          cmd, cmdsize = struct.unpack("<II", data[off:off+8])
+          if cmd == 0x19:
+          nsects = struct.unpack("<I", data[off+64:off+68])[0]
+          so = off + 72
+          for _ in range(nsects):
+          sname = data[so:so+16].split(b"\x00")[0].decode()
+          if sname in ("__init_offsets", "__mod_init_func"):
+          size = struct.unpack("<Q", data[so+40:so+48])[0]
+          inits.append((sname, size))
+          so += 80
+          off += cmdsize
+          print(f"{path.split('/')[-1]}: init_sections={inits}")
+          assert any(size > 0 for _, size in inits) == ("lazy" not in path), \
+          "plain must have a live initializer, lazy must not"
+          print("ctor validation OK")
+          EOF
+
       - name: macOS native control (darwin c-shared + dlopen test)
         continue-on-error: true
         run: |
@@ -189,26 +230,38 @@ jobs:
           python3 cmd/tscore/tools/stripinits.py dist/TsCore-mac-lazy.dylib 2>/dev/null || true
           run_watchdog 60 mac-lazy.log ./dist/dlopen_test_mac ./dist/TsCore-mac-lazy.dylib --lazy
 
-      - name: Boot iOS simulator
+      - name: Boot iOS simulator (prefer iOS 18.6 runtime)
         run: |
           set -euxo pipefail
-          UDID="$(python3 - <<'EOF'
-          import json, subprocess
-          out = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
-          devs = [d for ds in out.get("devices", {}).values() for d in ds if d.get("isAvailable") and d.get("name", "").startswith("iPhone")]
-          print(devs[0]["udid"] if devs else "")
+          # Prefer the iOS 18.6 runtime (the simulator form of the 18.6.x
+          # device OS line; 18.6.2 ships no separate sim runtime). Fall back
+          # to the newest iOS runtime if 18.6 is absent.
+          RUNTIME_NAME="$(xcrun simctl list runtimes -j | python3 - <<'EOF'
+          import json, subprocess, sys
+          d = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "runtimes", "-j"]))
+          rt = [r for r in d.get("runtimes", []) if r.get("name", "").startswith("iOS 18.6")]
+          if not rt:
+          rt = [r for r in d.get("runtimes", []) if r.get("name", "").startswith("iOS")]
+          print(rt[0]["identifier"] if rt else "")
           EOF
           )"
-          if [ -z "$UDID" ]; then
-            echo "no available iPhone device; creating one"
-            RUNTIME_ID="$(xcrun simctl list runtimes available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["runtimes"][0]["identifier"] if d["runtimes"] else "")')"
-            DEVICE_TYPE="$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; d=json.load(sys.stdin); t=[x for x in d["devicetypes"] if "iPhone" in x["name"]]; print(t[0]["identifier"] if t else "")')"
-            UDID="$(xcrun simctl create tscore-verify "$DEVICE_TYPE" "$RUNTIME_ID")"
+          echo "selected runtime: $RUNTIME_NAME"
+          if [ -z "$RUNTIME_NAME" ]; then
+            echo "::error::no iOS runtime available"; exit 1
           fi
+          DEVICE_TYPE="$(xcrun simctl list devicetypes -j | python3 -c '
+          import json, subprocess, sys
+          d = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devicetypes", "-j"]))
+          t = [x for x in d["devicetypes"] if "iPhone" in x["name"]]
+          print(t[0]["identifier"] if t else "")
+          ')"
+          UDID="$(xcrun simctl create tscore-verify "$DEVICE_TYPE" "$RUNTIME_NAME")"
           echo "UDID=$UDID" >> "$GITHUB_ENV"
-          xcrun simctl shutdown "$UDID" 2>/dev/null || true
+          echo "runtime=$RUNTIME_NAME" >> "$GITHUB_ENV"
+          echo "created simulator $UDID on $RUNTIME_NAME"
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl list runtimes | grep -i "$RUNTIME_NAME" || true
           echo "simulator booted: $UDID"
 
       - name: Run simulator dlopen tests (host app via simctl launch)
