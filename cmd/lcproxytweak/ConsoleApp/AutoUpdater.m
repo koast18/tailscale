@@ -211,6 +211,10 @@ static BOOL gDownloadedNew = NO;
         NSString *verPart = [name substringFromIndex:prefix.length];
         if (![verPart hasPrefix:@"v"]) continue;
         verPart = [verPart substringFromIndex:1];
+        // 去掉 .dylib 后缀（否则 split 后含 "dylib" 段导致校验失败，资产被跳过）
+        if ([verPart hasSuffix:@".dylib"]) {
+            verPart = [verPart substringToIndex:verPart.length - 6];
+        }
         NSArray *parts = [verPart componentsSeparatedByString:@"."];
         BOOL numeric = YES;
         for (NSString *p in parts) {
