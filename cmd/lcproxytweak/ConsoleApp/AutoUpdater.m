@@ -209,7 +209,7 @@ static BOOL gDownloadedNew = NO;
             NSFileManager *fm = [NSFileManager defaultManager];
             [fm removeItemAtPath:dst error:nil];
             NSError *werr = nil;
-            BOOL ok = [data writeToFile:dst atomically:YES error:&werr];
+            BOOL ok = [data writeToFile:dst options:NSDataWritingAtomic error:&werr];
             if (ok) return YES;
             [self diag:@"[写入] 失败 %@: %@ (err=%ld)", dst,
                             werr.localizedDescription ?: @"未知错误", (long)werr.code];
@@ -220,7 +220,7 @@ static BOOL gDownloadedNew = NO;
             [fm createDirectoryAtPath:[fb stringByDeletingLastPathComponent]
                   withIntermediateDirectories:YES attributes:nil error:nil];
             NSError *fberr = nil;
-            if ([data writeToFile:fb atomically:YES error:&fberr]) {
+            if ([data writeToFile:fb options:NSDataWritingAtomic error:&fberr]) {
                 [self diag:@"[写入] 已回退写入: %@", fb];
                 return NO; // 未落位到 Tweaks/，视为失败并暴露诊断
             }
