@@ -222,8 +222,8 @@ int const KPWebServerDefaultPort = 19092;
             int rc = [core loginWithAuthKey:authkey];
             NSTimeInterval dt = [NSDate timeIntervalSinceReferenceDate] - t0;
             [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleAuth
-                                     format:@"[login] TsLogin 返回 rc=%d 耗时=%.1fs needsLogin=%@", rc, dt,
-                                            @([[core needsLogin] == 1])];
+                                     format:@"[login] TsLogin 返回 rc=%d 耗时=%.1fs needsLogin=%d", rc, dt,
+                                            [core needsLogin]];
         });
         return [weakSelf json:@{@"status": @"async", @"message": @"登录进行中（≤2分钟）"}];
     }];
