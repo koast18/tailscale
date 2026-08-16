@@ -80,6 +80,10 @@ jobs:
           export GOTOOLCHAIN=local
           export PATH="$HOME/go/bin:$PATH"
           mkdir -p dist
+          # gomobile bind requires golang.org/x/mobile in the module graph
+          # (tool directive). Not committed; the tree may become dirty.
+          go get -tool golang.org/x/mobile/cmd/gobind@latest 2>&1 | tail -2 || true
+          go mod tidy 2>&1 | tail -2 || true
           gomobile bind -target=ios -prefix TsCore \
             -o dist/TsCore.xcframework tailscale.com/cmd/tscore/bind
           echo "=== xcframework layout ==="
