@@ -137,7 +137,11 @@ jobs:
           EOF
           git add altstore/altstore-source.json altstore/icon.png
           git -c user.name="ci" -c user.email="ci@local" commit -m "altstore: update source v${VERSION} [skip ci]" || echo "(no change)"
-          git push origin main 2>&1 | tail -2
+          # 并发 push 竞争：先 rebase 再推
+          git pull --rebase origin main 2>/dev/null || true
+          git push origin main 2>&1 | tail -2 || echo "push failed (retrying once)"
+          sleep 3
+          git push origin main 2>&1 | tail -1 || true
           echo "=== published source ==="
           cat altstore/altstore-source.json | head -20
 
