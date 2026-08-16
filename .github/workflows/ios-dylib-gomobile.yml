@@ -215,6 +215,9 @@ jobs:
             UDID=""
           done
           if [ -z "$UDID" ]; then echo "no simulator; skipping"; exit 0; fi
+          echo "UDID=$UDID"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
           xcrun simctl install "$UDID" "$APP"
           xcrun simctl launch --console "$UDID" dev.koast18.tscoreobjcverify > sim-objc.log 2>&1 &
           LPID=$!
