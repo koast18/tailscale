@@ -208,7 +208,23 @@ static BOOL gDownloadedNew = NO;
         if (data) {
             NSFileManager *fm = [NSFileManager defaultManager];
             [fm removeItemAtPath:dst error:nil];
-            return [data writeToFile:dst atomically:YES];
+            NSError *werr = nil;
+            BOOL ok = [data writeToFile:dst atomically:YES error:&werr];
+            if (ok) return YES;
+            [self diag:@"[写入] 失败 %@: %@ (err=%ld)", dst,
+                            werr.localizedDescription ?: @"未知错误", (long)werr.code];
+            // 回退：写入本 app Documents（至少保住文件，供人工拷贝）
+            NSString *fb = [[NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject
+                             stringByAppendingPathComponent:@"KingProxy"]
+                            stringByAppendingPathComponent:dst.lastPathComponent];
+            [fm createDirectoryAtPath:[fb stringByDeletingLastPathComponent]
+                  withIntermediateDirectories:YES attributes:nil error:nil];
+            NSError *fberr = nil;
+            if ([data writeToFile:fb atomically:YES error:&fberr]) {
+                [self diag:@"[写入] 已回退写入: %@", fb];
+                return NO; // 未落位到 Tweaks/，视为失败并暴露诊断
+            }
+            [self diag:@"[写入] 回退也失败: %@ (err=%ld)", fberr.localizedDescription ?: @"?", (long)fberr.code];
         }
     }
     return NO;
@@ -242,8 +258,12 @@ static BOOL gDownloadedNew = NO;
 
     NSString *tweaksDir = [root stringByAppendingPathComponent:@"Tweaks"];
     NSString *kingDir = [root stringByAppendingPathComponent:@"KingProxy"];
-    [fm createDirectoryAtPath:tweaksDir withIntermediateDirectories:YES attributes:nil error:nil];
-    [fm createDirectoryAtPath:kingDir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSError *dErr1 = nil, *dErr2 = nil;
+    [fm createDirectoryAtPath:tweaksDir withIntermediateDirectories:YES attributes:nil error:&dErr1];
+    [fm createDirectoryAtPath:kingDir withIntermediateDirectories:YES attributes:nil error:&dErr2];
+    [self diag:@"[路径] root=%@", root];
+    if (dErr1) [self diag:@"[路径] 创建 Tweaks 失败: %@", dErr1.localizedDescription ?: @"?"];
+    if (dErr2) [self diag:@"[路径] 创建 KingProxy 失败: %@", dErr2.localizedDescription ?: @"?"];
 
     void (^emit)(NSString *, double) = ^(NSString *stage, double f) {
         if (progress) dispatch_async(dispatch_get_main_queue(), ^{ progress(stage, f); });
