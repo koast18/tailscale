@@ -87,13 +87,13 @@ static NSString *const KPAutoUpdateTweakNamePrefix = @"LCProxyTweak-";
     NSString *kingDir = [root stringByAppendingPathComponent:@"KingProxy"];
     [fm createDirectoryAtPath:tweaksDir withIntermediateDirectories:YES attributes:nil error:nil];
     [fm createDirectoryAtPath:kingDir withIntermediateDirectories:YES attributes:nil error:nil];
-
     NSString *tag = [self latestReleaseTag];
     if (!tag.length) return @"获取最新版本失败（网络/API）";
 
     NSMutableArray *steps = [NSMutableArray array];
 
-    // 1) tweak → Tweaks/（LiveContainer 强制签名后由 TweakLoader 加载）
+    // 1) tweak → Tweaks/（LiveContainer 检测到无签名会自动用用户证书 ZSign 重签，
+    //    然后由 TweakLoader 加载）
     NSString *tweakName = [NSString stringWithFormat:@"%@%@.dylib", KPAutoUpdateTweakNamePrefix, tag];
     NSString *tweakDst = [tweaksDir stringByAppendingPathComponent:tweakName];
     BOOL needTweak = ![fm fileExistsAtPath:tweakDst];
@@ -107,9 +107,10 @@ static NSString *const KPAutoUpdateTweakNamePrefix = @"LCProxyTweak-";
         [steps addObject:[NSString stringWithFormat:@"tweak %@ 已存在", tag]];
     }
 
-    // 2) core → KingProxy/（版本源；Tweaks/ 副本由 tweak 侧在签名后同步）
+    // 2) core → 同样放 Tweaks/（未签名无法 dlopen；与 tweak 一起被 LC 签名，
+    //    KPTsCore 扫描 Tweaks/libTailscaleCore-*.dylib 取最新版本加载）
     NSString *coreName = [NSString stringWithFormat:@"%@%@.dylib", KPAutoUpdateCoreNamePrefix, tag];
-    NSString *coreDst = [kingDir stringByAppendingPathComponent:coreName];
+    NSString *coreDst = [tweaksDir stringByAppendingPathComponent:coreName];
     BOOL needCore = ![fm fileExistsAtPath:coreDst];
     if (needCore) {
         if ([self downloadAsset:coreName toPath:coreDst]) {
@@ -128,7 +129,7 @@ static NSString *const KPAutoUpdateTweakNamePrefix = @"LCProxyTweak-";
         [fm removeItemAtPath:p error:nil];
         [steps addObject:[NSString stringWithFormat:@"清理旧 tweak %@", p.lastPathComponent]];
     }
-    NSArray *oldCore = [self existingVersionedFilesIn:kingDir prefix:KPAutoUpdateCoreNamePrefix
+    NSArray *oldCore = [self existingVersionedFilesIn:tweaksDir prefix:KPAutoUpdateCoreNamePrefix
                                                  keep:coreName];
     for (NSString *p in oldCore) {
         [fm removeItemAtPath:p error:nil];
@@ -136,7 +137,7 @@ static NSString *const KPAutoUpdateTweakNamePrefix = @"LCProxyTweak-";
     }
 
     NSString *summary = [steps componentsJoinedByString:@"\n"];
-    return [NSString stringWithFormat:@"✅ %@\n\n请到 LiveContainer「设置 → 签名证书」确保证书已导入，然后对 Tweaks 强制签名一次并重启 App 使 tweak 生效。", summary];
+    return [NSString stringWithFormat:@"✅ %@\n\n两个 dylib 均已放入 Tweaks/（版本化文件名）：LiveContainer 检测到无签名会自动用你导入的证书重签。请退出 App 重新打开（或重启 LiveContainer）使 tweak 生效。", summary];
 }
 
 @end
