@@ -16,7 +16,7 @@
 #import <sys/utsname.h>
 #import <unistd.h>
 
-NSString *const KPTweakVersionString = @"0.2.13";
+NSString *const KPTweakVersionString = @"0.2.14";
 
 __attribute__((constructor))
 void LCProxyTweakConstructor(void) {
