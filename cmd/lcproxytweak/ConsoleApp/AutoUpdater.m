@@ -53,6 +53,7 @@ static NSString *const KPAutoUpdateMirrorPrefix = @"https://gh-proxy.com/";
 }
 @end
 
+@implementation AutoUpdater
 // NSURLSession dataTask 同步封装：真实进度（received/total）经 progress 回调
 + (NSData *)downloadSynchronous:(NSString *)urlString progress:(void (^)(double))progress {
     NSURL *url = [NSURL URLWithString:urlString];
@@ -83,7 +84,6 @@ static NSString *const KPAutoUpdateMirrorPrefix = @"https://gh-proxy.com/";
     return result;
 }
 
-@implementation AutoUpdater
 
 // 诊断记录：每次网络尝试的 URL / 状态码 / 错误，失败时随错误信息上屏
 static NSMutableString *gDiag = nil;
