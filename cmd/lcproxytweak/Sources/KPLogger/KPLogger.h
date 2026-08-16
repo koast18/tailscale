@@ -50,6 +50,8 @@ FOUNDATION_EXPORT NSString *KPMaskLongRuns(NSString *string);
 
 /// 日志根目录（其下建 KingProxy/logs/）。默认 NSDocumentDirectory；测试可覆盖。
 @property (nonatomic, copy) NSString *baseDirectory;
+/// logs 目录绝对路径（= baseDirectory/KingProxy/logs，用于崩溃日志等）
+- (NSString *)logsDirectory;
 /// 最低记录级别，默认 Debug。
 @property (nonatomic, assign) KPLogLevel minLevel;
 
