@@ -19,6 +19,11 @@
 #include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
+
+// 前向声明（static 函数使用在前、定义在后）
+static ssize_t kp_sendto_replacement(int fd, const void *buf, size_t len, int flags,
+                                     const struct sockaddr *to, socklen_t tolen);
+static ssize_t kp_sendmsg_replacement(int fd, const struct msghdr *msg, int flags);
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
