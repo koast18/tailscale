@@ -126,6 +126,11 @@ jobs:
           APP="dist/TsCoreObjCVerify.app"
           rm -rf "$APP"; mkdir -p "$APP"
           SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          # generated headers must be in place BEFORE compiling the test
+          HDRDIR="$(dirname "$SIM")/Headers"
+          cp "$HDRDIR"/*.h "$APP/"
+          echo "=== generated ObjC header (TsCoreTscorebind selectors) ==="
+          grep -hE "@interface|@property|newServer|versionString|isRunning|startWith|error" "$APP/TsCoreTscorebind.objc.h" | head -40 || true
           cat > /tmp/objc_test.m <<'EOF'
           #import <UIKit/UIKit.h>
           #import <dlfcn.h>
