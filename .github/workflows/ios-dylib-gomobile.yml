@@ -162,12 +162,10 @@ jobs:
           }
           EOF
           clang -arch arm64 -isysroot "${SDK}" -mios-simulator-version-min=15.0 -fobjc-arc \
+            -I "$APP" \
             /tmp/objc_test.m -framework UIKit -framework Foundation -framework CoreGraphics \
             -o "$APP/TsCoreObjCVerify"
           codesign -s - --force "$APP/TsCoreObjCVerify"
-          # copy the generated headers next to the app so the test can import them
-          HDRDIR="$(dirname "$SIM")/Headers"
-          cp "$HDRDIR"/*.h "$APP/"
           cat > "$APP/Info.plist" <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
