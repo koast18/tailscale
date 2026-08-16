@@ -175,25 +175,25 @@ jobs:
           python3 - <<'EOF'
           import struct
           for path in ("dist/TsCore-cshared-device.dylib", "dist/TsCore-cshared-device-lazy.dylib"):
-          data = open(path, "rb").read()
-          ncmds = struct.unpack("<I", data[16:20])[0]
-          off = 32
-          inits = []
-          for _ in range(ncmds):
-          cmd, cmdsize = struct.unpack("<II", data[off:off+8])
-          if cmd == 0x19:
-          nsects = struct.unpack("<I", data[off+64:off+68])[0]
-          so = off + 72
-          for _ in range(nsects):
-          sname = data[so:so+16].split(b"\x00")[0].decode()
-          if sname in ("__init_offsets", "__mod_init_func"):
-          size = struct.unpack("<Q", data[so+40:so+48])[0]
-          inits.append((sname, size))
-          so += 80
-          off += cmdsize
-          print(f"{path.split('/')[-1]}: init_sections={inits}")
-          assert any(size > 0 for _, size in inits) == ("lazy" not in path), \
-          "plain must have a live initializer, lazy must not"
+              data = open(path, "rb").read()
+              ncmds = struct.unpack("<I", data[16:20])[0]
+              off = 32
+              inits = []
+              for _ in range(ncmds):
+                  cmd, cmdsize = struct.unpack("<II", data[off:off+8])
+                  if cmd == 0x19:
+                      nsects = struct.unpack("<I", data[off+64:off+68])[0]
+                      so = off + 72
+                      for _ in range(nsects):
+                          sname = data[so:so+16].split(b"\x00")[0].decode()
+                          if sname in ("__init_offsets", "__mod_init_func"):
+                              size = struct.unpack("<Q", data[so+40:so+48])[0]
+                              inits.append((sname, size))
+                          so += 80
+                  off += cmdsize
+              print(f"{path.split('/')[-1]}: init_sections={inits}")
+              assert any(size > 0 for _, size in inits) == ("lazy" not in path), \
+                  "plain must have a live initializer, lazy must not"
           print("ctor validation OK")
           EOF
 
@@ -241,7 +241,7 @@ jobs:
           d = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "runtimes", "-j"]))
           rt = [r for r in d.get("runtimes", []) if r.get("name", "").startswith("iOS 18.6")]
           if not rt:
-          rt = [r for r in d.get("runtimes", []) if r.get("name", "").startswith("iOS")]
+              rt = [r for r in d.get("runtimes", []) if r.get("name", "").startswith("iOS")]
           print(rt[0]["identifier"] if rt else "")
           EOF
           )"
