@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>LCProxy 控制台</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --border:#2a2f3a;
+  --fg:#e6e9ef; --dim:#8b93a3; --accent:#4f8cff; --ok:#3ecf8e; --bad:#ff5c5c;
+  --warn:#ffb454;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding-bottom:60px}
+header{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--border);background:var(--panel)}
+header h1{font-size:17px;font-weight:600}
+header .badge{margin-left:auto;font-size:12px;color:var(--dim)}
+nav{display:flex;gap:6px;padding:10px 16px;overflow-x:auto;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:5}
+nav button{flex:0 0 auto;padding:8px 16px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--dim);font-size:14px;cursor:pointer}
+nav button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+main{padding:16px;max-width:860px;margin:0 auto}
+.tab{display:none}
+.tab.active{display:block}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px}
+.card h2{font-size:15px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px dashed var(--border)}
+.row:last-child{border-bottom:none}
+.row .k{color:var(--dim)}
+.row .v{font-weight:500;word-break:break-all;text-align:right}
+.ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)} .dim{color:var(--dim)}
+input[type=text],input[type=password],select{width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel2);color:var(--fg);font-size:14px;margin:4px 0}
+button{appearance:none;border:1px solid var(--border);border-radius:8px;background:var(--panel2);color:var(--fg);padding:9px 14px;font-size:14px;cursor:pointer;margin:4px 4px 4px 0}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.danger{background:transparent;border-color:var(--bad);color:var(--bad)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.switch{position:relative;width:46px;height:26px;display:inline-block}
+.switch input{opacity:0;width:0;height:0}
+.switch .slider{position:absolute;inset:0;background:var(--border);border-radius:13px;transition:.2s}
+.switch .slider:before{content:"";position:absolute;width:20px;height:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
+.switch input:checked + .slider{background:var(--ok)}
+.switch input:checked + .slider:before{transform:translateX(20px)}
+.steps{max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:6px;background:var(--panel2);font-size:12px}
+.step{display:flex;gap:8px;padding:4px 6px;border-bottom:1px dashed var(--border)}
+.step:last-child{border-bottom:none}
+.step .t{color:var(--dim);flex:0 0 auto}
+.step .m{color:var(--accent);flex:0 0 auto}
+.step .n{flex:0 0 auto;font-weight:600}
+.step .d{color:var(--dim);flex:1}
+.msg{margin-top:8px;font-size:13px;min-height:20px}
+pre{white-space:pre-wrap;word-break:break-all;font-size:12px;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px;max-height:260px;overflow:auto}
+footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;background:var(--panel);border-top:1px solid var(--border);font-size:12px;color:var(--dim);display:flex;gap:10px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🛰 LCProxy 控制台</h1>
+  <span class="badge" id="hdrVer">…</span>
+</header>
+<nav>
+  <button data-tab="status" class="active">状态</button>
+  <button data-tab="ts">Tailscale</button>
+  <button data-tab="king">出口代理</button>
+  <button data-tab="about">关于</button>
+</nav>
+<main>
+
+<!-- ============ 状态 ============ -->
+<section class="tab active" id="tab-status">
+  <div class="card">
+    <h2>Tailscale 核心</h2>
+    <div class="row"><span class="k">核心文件</span><span class="v" id="st-corePresent">…</span></div>
+    <div class="row"><span class="k">版本</span><span class="v" id="st-coreVersion">…</span></div>
+    <div class="row"><span class="k">运行状态</span><span class="v" id="st-running">…</span></div>
+    <div class="row"><span class="k">登录</span><span class="v" id="st-needsLogin">…</span></div>
+    <div class="row"><span class="k">当前用户</span><span class="v" id="st-user">…</span></div>
+    <div class="row"><span class="k">本机 IP</span><span class="v" id="st-ips">…</span></div>
+    <div class="row"><span class="k">DERP-only</span><span class="v" id="st-derp">…</span></div>
+    <div class="row"><span class="k">出口节点</span><span class="v" id="st-exit">…</span></div>
+  </div>
+  <div class="card">
+    <h2>模式</h2>
+    <div class="row"><span class="k">当前模式</span><span class="v" id="st-mode">…</span></div>
+    <div class="row"><span class="k">Tailscale</span><span class="v" id="st-ts">…</span></div>
+    <div class="row"><span class="k">免流出口</span><span class="v" id="st-king">…</span></div>
+    <div class="row"><span class="k">期望 hook 代理</span><span class="v" id="st-proxy">…</span></div>
+  </div>
+  <div class="card">
+    <h2>免流出口</h2>
+    <div class="row"><span class="k">转发器</span><span class="v" id="st-kingRun">…</span></div>
+    <div class="row"><span class="k">凭证(GUID)</span><span class="v" id="st-guid">…</span></div>
+    <div class="row"><span class="k">上次刷新</span><span class="v" id="st-refresh">…</span></div>
+    <div class="row"><span class="k">取号 / 登录 / 探活</span><span class="v" id="st-kingChecks">…</span></div>
+  </div>
+</section>
+
+<!-- ============ Tailscale ============ -->
+<section class="tab" id="tab-ts">
+  <div class="card">
+    <h2>Tailscale 开关</h2>
+    <div class="row"><span class="k">启用 Tailscale</span>
+      <label class="switch"><input type="checkbox" id="ts-enabled"><span class="slider"></span></label></div>
+    <div class="row"><span class="k">模式</span><span class="v" id="ts-mode">…</span></div>
+    <div class="msg dim">开启后切到模式 A（+免流）或 B（仅 Tailscale）；core 会自动加载。免流联动时自动强制 DERP-only。</div>
+    <div class="msg dim" id="ts-enablemsg"></div>
+  </div>
+  <div class="card">
+    <h2>登录</h2>
+    <input type="text" id="ts-authkey" placeholder="AuthKey（留空则输出登录 URL）" autocomplete="off">
+    <button class="primary" id="btn-login">登录</button>
+    <button class="danger" id="btn-logout">登出(清状态)</button>
+    <div class="msg dim" id="ts-loginmsg"></div>
+  </div>
+  <div class="card">
+    <h2>核心更新</h2>
+    <div class="row"><span class="k">本地版本</span><span class="v" id="up-local">…</span></div>
+    <div class="row"><span class="k">最新版本</span><span class="v" id="up-latest">…</span></div>
+    <div class="row"><span class="k">更新源</span><span class="v" id="up-repo">…</span></div>
+    <button class="primary" id="btn-check">检查更新</button>
+    <button id="btn-download">下载并安装(重启生效)</button>
+    <input type="text" id="up-custom" placeholder="自定义下载 URL（默认走 GitHub Release）">
+    <button id="btn-download-custom">自定义下载</button>
+    <div class="msg dim" id="up-msg"></div>
+  </div>
+  <div class="card">
+    <h2>出口节点</h2>
+    <select id="ts-exitnodes"><option value="">加载中…</option></select>
+    <button class="primary" id="btn-exit-apply">应用</button>
+    <button id="btn-exit-clear">清除</button>
+    <div class="msg dim" id="ts-exitmsg"></div>
+  </div>
+  <div class="card">
+    <h2>诊断</h2>
+    <div class="row"><span class="k">Ping 目标(100.x)</span><span class="v" style="text-align:right"><input type="text" id="ts-pingip" placeholder="100.x.y.z" style="width:160px"></span></div>
+    <button id="btn-ping">Ping(disco)</button>
+    <button id="btn-netcheck">Netcheck</button>
+    <div class="msg dim" id="ts-diagmsg"></div>
+    <pre id="ts-diagout" style="display:none"></pre>
+  </div>
+  <div class="card">
+    <h2>偏好</h2>
+    <div class="row"><span class="k">RouteAll（接收子网路由）</span>
+      <label class="switch"><input type="checkbox" id="ts-routeall"><span class="slider"></span></label></div>
+    <button id="btn-routeall">保存 RouteAll</button>
+    <div class="msg dim" id="ts-prefsmsg"></div>
+  </div>
+</section>
+
+<!-- ============ 出口代理 ============ -->
+<section class="tab" id="tab-king">
+  <div class="card">
+    <h2>免流出口</h2>
+    <div class="row"><span class="k">启用免流</span>
+      <label class="switch"><input type="checkbox" id="kg-enabled"><span class="slider"></span></label></div>
+    <div class="row"><span class="k">Tailscale 联动</span><span class="v" id="kg-link">…</span></div>
+    <div class="msg dim" id="kg-msg"></div>
+  </div>
+  <div class="card">
+    <h2>凭证（自动取号）</h2>
+    <div class="row"><span class="k">GUID</span><span class="v" id="kg-guid">…</span></div>
+    <div class="row"><span class="k">取号(kingcard)</span><span class="v" id="kg-fetch">…</span></div>
+    <div class="row"><span class="k">登录激活</span><span class="v" id="kg-login">…</span></div>
+    <div class="row"><span class="k">探活(generate_204)</span><span class="v" id="kg-probe">…</span></div>
+    <div class="msg dim">取号=拿 GUID/TOKEN；登录激活=向免流网关注册会话；探活=验证真免流(204 即通)</div>
+    <div class="row"><span class="k">上次刷新</span><span class="v" id="kg-refresh">…</span></div>
+    <div class="row"><span class="k">刷新来源/次数</span><span class="v" id="kg-source">…</span></div>
+    <div class="row"><span class="k">取号路由</span><span class="v" id="kg-route">…</span></div>
+    <div class="row"><span class="k">上游</span><span class="v" id="kg-upstream">…</span></div>
+    <button id="btn-kg-refresh">立即刷新凭证</button>
+    <details style="margin-top:6px"><summary class="dim">手动覆盖凭证（可选）</summary>      <input type="text" id="kg-guid-input" placeholder="GUID（留空=自动）" autocomplete="off">
+      <input type="password" id="kg-token-input" placeholder="TOKEN（留空=自动）">
+      <button id="btn-kg-override">保存覆盖</button>
+    </details>
+  </div>
+  <div class="card">
+    <h2>DERP-only（仅中继）</h2>
+    <div class="row"><span class="k">状态</span><span class="v" id="kg-derp">…</span></div>
+    <div class="msg dim">免流开启时自动强制 DERP-only（禁 P2P/打洞）；切换会短暂断连。</div>
+    <div class="card">
+      <h2>出口 IP 测试</h2>
+      <div class="row"><span class="k">当前出口 IP</span><span class="v" id="kg-ip">…</span></div>
+      <div class="row"><span class="k">检测时间</span><span class="v" id="kg-ipat">…</span></div>
+      <button id="btn-ipcheck">测试出口 IP（经免流网关）</button>
+      <div class="msg dim">经免流网关访问 IP 服务的结果。刷新后变化=走了代理；不变或失败=直连/网关不通。</div>
+      <div class="msg dim" id="kg-ipmsg"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 关于 ============ -->
+<section class="tab" id="tab-about">
+  <div class="card">
+    <h2>关于</h2>
+    <div class="row"><span class="k">Tweak 版本</span><span class="v" id="ab-tweak">…</span></div>
+    <div class="row"><span class="k">Core 版本</span><span class="v" id="ab-core">…</span></div>
+    <div class="row"><span class="k">日志文件</span><span class="v" id="ab-logfile">…</span></div>
+    <div class="row"><span class="k">调试模式</span>
+      <label class="switch"><input type="checkbox" id="ab-debug-switch"><span class="slider"></span></label></div>
+    <div class="row"><span class="k">日志级别</span><span class="v" id="ab-loglevel">…</span></div>
+    <div class="msg dim" id="ab-debugmsg"></div>
+    <p class="dim" style="margin-top:8px">
+      LCProxyTweak：LiveContainer 容器内 App 全量流量走 Tailscale / 王卡免流。
+      四模式：A(tailscale+免流) / B(tailscale) / C(纯免流) / D(全关)。
+      日志位于 Documents/KingProxy/logs/，每次启动一个新文件，最多保留 50 个。
+    </p>
+  </div>
+  <div class="card">
+    <h2>调试 · 启动步骤验证</h2>
+    <button id="btn-steps-refresh">刷新步骤</button>
+    <div class="msg dim">每步 ✓/✗：boot → config → mode → king → tscore → web</div>
+    <div class="steps" id="ab-steps"><div class="dim">加载中…</div></div>
+  </div>
+</section>
+
+</main>
+<footer>
+  <span id="ft-status">…</span>
+  <span style="flex:1"></span>
+  <span id="ft-time"></span>
+</footer>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+let state={};
+
+async function api(path,opts){
+  const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});
+  let j=null; try{j=await r.json()}catch(e){}
+  if(!r.ok) return {error:(j&&(j.error||j.message))||("HTTP "+r.status)};
+  return j;
+}
+function fmtBool(b){return b?"<span class='ok'>✓ 是</span>":"<span class='bad'>✗ 否</span>";}
+function fmtState(s){return s==="✓"?"<span class='ok'>✓</span>":(s==="✗"?"<span class='bad'>✗</span>":(s==="?"?"<span class='dim'>?</span>":"<span class='warn'>"+s+"</span>"));}
+
+// ---------- 状态 ----------
+async function loadStatus(){
+  const st=await api("/api/status");
+  if(st.error){$("ft-status").textContent="状态获取失败: "+st.error;return;}
+  state.status=st;
+  $("st-corePresent").innerHTML=st.core.present?fmtBool(true):"<span class='bad'>未安装</span>";
+  $("st-coreVersion").textContent=st.core.version||"—";
+  $("st-running").innerHTML=st.core.running?fmtBool(true):"<span class='bad'>未运行</span>";
+  $("st-needsLogin").innerHTML=st.core.needsLogin?("<span class='bad'>需要登录</span>"):fmtBool(true);
+  $("st-user").textContent=st.core.currentUser||"—";
+  $("st-ips").textContent=(st.core.tailscaleIPs||[]).join(", ")||"—";
+  $("st-derp").textContent=st.derpOnly?"<span class='ok'>开启(仅中继)</span>":"关闭";
+  $("st-exit").textContent=st.exitNode&&st.exitNode.name?st.exitNode.name:"—";
+  $("st-mode").textContent=st.mode;
+  $("st-ts").innerHTML=fmtBool(st.tailscaleEnabled);
+  $("st-king").innerHTML=fmtBool(st.kingEnabled);
+  $("st-proxy").textContent=st.desiredProxy||"—";
+  $("st-kingRun").innerHTML=st.king.running?fmtBool(true):"<span class='bad'>停止</span>";
+  $("st-guid").textContent=st.king.guidMasked||"—";
+  $("st-refresh").textContent=st.king.lastRefresh||"—";
+  $("st-kingChecks").innerHTML=
+    "取号"+fmtState(st.king.lastFetchOk===true?"✓":(st.king.lastFetchOk===false?"✗":"?"))+
+    " 登录"+fmtState(st.king.lastLoginOk===true?"✓":(st.king.lastLoginOk===false?"✗":"?"))+
+    " 探活"+fmtState(st.king.probeOk===true?"✓":(st.king.probeOk===false?"✗":"?"));
+  $("kg-enabled").checked=!!st.kingEnabled;
+  $("ts-enabled").checked=!!st.tailscaleEnabled;
+  $("ts-mode").textContent=st.mode;
+  $("kg-guid").textContent=st.king.guidMasked||"—";
+  $("kg-fetch").innerHTML=fmtState(st.king.lastFetchOk===true?"✓":(st.king.lastFetchOk===false?"✗":"?"));
+  $("kg-login").innerHTML=fmtState(st.king.lastLoginOk===true?"✓":(st.king.lastLoginOk===false?"✗":"?"));
+  $("kg-probe").innerHTML=st.king.probeRan?fmtState(st.king.probeOk?"✓":"✗"):"<span class='dim'>— 未执行</span>";
+  $("kg-refresh").textContent=st.king.lastRefresh||"—";
+  $("kg-source").textContent=(st.king.lastRefreshSource||"—")+" × "+(st.king.refreshCount||0);
+  $("kg-route").textContent=st.king.lastFetchRoute||"—";
+  $("kg-upstream").textContent=st.king.upstream||"—";
+  $("kg-link").textContent=st.kingEnabled?"免流开 → 强制 DERP-only":"—";
+  $("kg-derp").textContent=st.derpOnly?"<span class='ok'>DERP-only 开启</span>":"P2P 允许";
+  $("ft-status").textContent="已连接 · 模式 "+st.mode;
+  $("hdrVer").textContent="tweak "+st.tweakVersion+(st.core.version?" · core "+st.core.version:"");
+}
+
+// ---------- 关于 / 调试 ----------
+async function loadAbout(){
+  const v=await api("/api/version");
+  if(!v.error){$("ab-tweak").textContent=v.tweakVersion; $("ab-core").textContent=v.coreVersion||"—";}
+  const d=await api("/api/debug");
+  if(!d.error){
+    $("ab-debug-switch").checked=!!d.debugEnabled;
+    $("ab-loglevel").textContent=d.logLevel||"—";
+    $("ab-logfile").textContent=d.logFile||"—";
+    renderSteps(d.steps||[]);
+  }
+}
+
+$("ab-debug-switch").onchange=async e=>{
+  const r=await api("/api/debug",{method:"POST",body:JSON.stringify({enabled:e.target.checked})});
+  $("ab-debugmsg").textContent=r.error?("失败: "+r.error):(e.target.checked?"调试模式已开启（日志级别 debug）":"调试模式已关闭（日志级别 info）");
+  loadAbout();
+};
+function renderSteps(steps){
+  const box=$("ab-steps");
+  if(!steps.length){box.innerHTML="<div class='dim'>暂无步骤记录</div>";return;}
+  box.innerHTML=steps.map(s=>
+    "<div class='step'><span class='t'>"+s.t.slice(11,23)+"</span>"+
+    "<span class='m'>["+s.module+"]</span>"+
+    "<span class='n'>"+(s.ok?"✓":"✗")+" "+escapeHtml(s.name)+"</span>"+
+    "<span class='d'>"+escapeHtml(s.detail)+"</span></div>"
+  ).join("");
+}
+function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+
+// ---------- 交互 ----------
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("nav button").forEach(x=>x.classList.remove("active"));
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active");
+  $("tab-"+b.dataset.tab).classList.add("active");
+  if(b.dataset.tab==="status")loadStatus();
+  if(b.dataset.tab==="king")loadStatus();
+  if(b.dataset.tab==="about")loadAbout();
+});
+
+$("kg-enabled").onchange=async e=>{
+  const r=await api("/api/king",{method:"POST",body:JSON.stringify({enabled:e.target.checked})});
+  $("kg-msg").textContent=r.error?("失败: "+r.error):"已保存，重新应用模式";
+  loadStatus();
+};
+
+$("ts-enabled").onchange=async e=>{
+  $("ts-enablemsg").textContent="保存中…";
+  const r=await api("/api/tailscale",{method:"POST",body:JSON.stringify({enabled:e.target.checked})});
+  $("ts-enablemsg").textContent=r.error?("失败: "+r.error):"已保存，重新应用模式";
+  loadStatus();
+};
+
+$("btn-kg-refresh").onclick=async()=>{
+  $("kg-msg").textContent="刷新中…";
+  const r=await api("/api/king/refresh",{method:"POST"});
+  $("kg-msg").textContent=r.error?("失败: "+r.error):"刷新完成";
+  loadStatus();
+};
+
+$("btn-ipcheck").onclick=async()=>{
+  $("kg-ipmsg").textContent="检测中(经免流网关)…";
+  const r=await api("/api/ipcheck");
+  if(r.error){
+    $("kg-ipmsg").textContent="失败: "+r.error;
+  }else{
+    $("kg-ip").textContent=r.ip;
+    $("kg-ipat").textContent=r.at||"";
+    $("kg-ipmsg").textContent="经免流网关出口 IP（直连对比：关免流后再测一次）";
+  }
+};
+
+$("btn-kg-override").onclick=async()=>{
+  const r=await api("/api/king",{method:"POST",body:JSON.stringify({guid:$("kg-guid-input").value||null,token:$("kg-token-input").value||null})});
+  $("kg-msg").textContent=r.error?("失败: "+r.error):"覆盖凭证已保存";
+  loadStatus();
+};
+
+$("btn-login").onclick=async()=>{
+  const st=state.status||{};
+  if(!st.tailscaleEnabled){
+    $("ts-loginmsg").textContent="请先在上方打开「启用 Tailscale」开关（切到模式 A/B）再登录";
+    return;
+  }
+  if(st.core&&!st.core.present){
+    $("ts-loginmsg").textContent="core 未安装：请先下载并安装 TailscaleCore（本页核心更新）";
+    return;
+  }
+  const key=$("ts-authkey").value.trim();
+  $("ts-loginmsg").textContent=key?"登录中(≤2分钟)…":"获取登录 URL…";
+  const r=await api("/api/login",{method:"POST",body:JSON.stringify({authkey:key})});
+  $("ts-loginmsg").textContent=r.error?("失败: "+r.error):(r.loginURL?("请用浏览器打开: "+r.loginURL):"登录完成");
+  loadStatus();
+};
+
+$("btn-logout").onclick=async()=>{
+  const r=await api("/api/logout",{method:"POST"});
+  $("ts-loginmsg").textContent=r.error?("失败: "+r.error):"已登出";
+  loadStatus();
+};
+
+$("btn-check").onclick=async()=>{
+  $("up-msg").textContent="检查中…";
+  const r=await api("/api/core/check");
+  $("up-latest").textContent=r.latestVersion||"—";
+  $("up-msg").textContent=r.error?("失败: "+r.error):("最新: "+(r.latestVersion||"—")+(r.upToDate?"（已是最新）":""));
+};
+
+$("btn-download").onclick=async()=>{
+  $("up-msg").textContent="下载中…";
+  const r=await api("/api/core/download",{method:"POST",body:JSON.stringify({})});
+  $("up-msg").textContent=r.error?("失败: "+r.error):("下载完成: "+r.message);
+};
+
+$("btn-download-custom").onclick=async()=>{
+  const url=$("up-custom").value.trim();
+  if(!url){$("up-msg").textContent="请输入自定义 URL";return;}
+  $("up-msg").textContent="下载中…";
+  const r=await api("/api/core/download",{method:"POST",body:JSON.stringify({url})});
+  $("up-msg").textContent=r.error?("失败: "+r.error):("下载完成: "+r.message);
+};
+
+$("btn-exit-apply").onclick=async()=>{
+  const id=$("ts-exitnodes").value;
+  if(!id){$("ts-exitmsg").textContent="请选择节点";return;}
+  const r=await api("/api/exitnode",{method:"POST",body:JSON.stringify({id})});
+  $("ts-exitmsg").textContent=r.error?("失败: "+r.error):"已应用";
+  loadStatus();
+};
+$("btn-exit-clear").onclick=async()=>{
+  const r=await api("/api/exitnode/clear",{method:"POST"});
+  $("ts-exitmsg").textContent=r.error?("失败: "+r.error):"已清除";
+  loadStatus();
+};
+
+async function loadExitNodes(){
+  const r=await api("/api/exitnodes");
+  if(r.error){$("ts-exitnodes").innerHTML="<option>加载失败: "+r.error+"</option>";return;}
+  const list=r.nodes||[];
+  $("ts-exitnodes").innerHTML=list.length?
+    list.map(n=>"<option value='"+n.id+"'>"+(n.countryCode?("["+n.countryCode+"] "):"")+n.name+(n.online?"":"(离线)")+"</option>").join(""):
+    "<option value=''>暂无可用出口节点（需 core 运行且在线）</option>";
+}
+
+$("btn-ping").onclick=async()=>{
+  const ip=$("ts-pingip").value.trim();
+  if(!ip){$("ts-diagmsg").textContent="请输入目标 IP";return;}
+  $("ts-diagmsg").textContent="Ping 中…";
+  const r=await api("/api/ping",{method:"POST",body:JSON.stringify({ip,type:"disco"})});
+  $("ts-diagmsg").textContent=r.error?("失败: "+r.error):"完成";
+  $("ts-diagout").style.display="block";
+  $("ts-diagout").textContent=JSON.stringify(r.result||r,null,2);
+};
+$("btn-netcheck").onclick=async()=>{
+  $("ts-diagmsg").textContent="Netcheck 中…";
+  const r=await api("/api/netcheck",{method:"POST"});
+  $("ts-diagmsg").textContent=r.error?("失败: "+r.error):"完成";
+  $("ts-diagout").style.display="block";
+  $("ts-diagout").textContent=JSON.stringify(r.result||r,null,2);
+};
+
+$("btn-routeall").onclick=async()=>{
+  const r=await api("/api/prefs",{method:"POST",body:JSON.stringify({routeAll:$("ts-routeall").checked})});
+  $("ts-prefsmsg").textContent=r.error?("失败: "+r.error):"已保存";
+};
+
+$("btn-steps-refresh").onclick=loadAbout;
+
+// ---------- 轮询 ----------
+setInterval(()=>{
+  const active=document.querySelector("nav button.active").dataset.tab;
+  if(active==="status")loadStatus();
+},3000);
+setInterval(()=>{$("ft-time").textContent=new Date().toLocaleTimeString();},1000);
+
+// 初始
+loadStatus(); loadAbout(); loadExitNodes();
+</script>
+</body>
+</html>

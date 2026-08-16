@@ -1,0 +1,70 @@
+# Builds LCProxyTweak (LiveContainer proxy tweak: 王卡免流 + Tailscale core
+# 生命周期) inside this public repo, because GitHub Free private repos cannot
+# use macOS runners. The dylib + console app land in the same Release as
+# libTailscaleCore.
+#
+# Source: cmd/lcproxytweak (mirror of koast18/lcproxy-tweak).
+# LiveContainer signs both products locally (ZSign) on import; we ship them
+# unsigned on purpose.
+name: LCProxyTweak dylib
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/lcproxytweak/**'
+
+permissions:
+  contents: write
+
+jobs:
+  lcproxy:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate embedded console HTML header
+        run: |
+          cd cmd/lcproxytweak
+          node Scripts/gen_console_asset.js Resources/console.html Sources/KPWebServer/ConsoleHTML.h
+
+      - name: Build tweak dylib
+        run: |
+          cd cmd/lcproxytweak
+          ./Scripts/build_ios.sh
+
+      - name: Verify dylib
+        run: |
+          file cmd/lcproxytweak/build/LCProxyTweak.dylib
+          nm -gU cmd/lcproxytweak/build/LCProxyTweak.dylib | awk '{print $NF}' | sed 's/^_//' | grep -E '^(LCProxyTweakConstructor|KPTsCore|KPWebServer|KPModeController|KPKingForwarder|kp_)' | sort -u | head -12
+
+      - name: Build console app (.ipa)
+        run: |
+          cd cmd/lcproxytweak
+          ./Scripts/build_console.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LCProxyTweak-ios
+          path: |
+            cmd/lcproxytweak/build/LCProxyTweak.dylib
+            cmd/lcproxytweak/build/LCProxyConsole.ipa
+          if-no-files-found: error
+
+      - name: Attach to Release v0.1.0 (if exists)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          if gh release view v0.1.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload v0.1.0 \
+              cmd/lcproxytweak/build/LCProxyTweak.dylib \
+              cmd/lcproxytweak/build/LCProxyConsole.ipa \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            echo "uploaded to v0.1.0"
+          else
+            echo "release v0.1.0 not present; artifacts are in the run"
+          fi

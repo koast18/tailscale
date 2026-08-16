@@ -64,3 +64,6 @@ gafpush
 # Local experiment artifacts / pi goal state
 /.checks
 /.pi
+
+# LCProxyTweak build outputs
+cmd/lcproxytweak/build/
