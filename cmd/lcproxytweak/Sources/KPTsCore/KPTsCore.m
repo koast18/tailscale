@@ -394,17 +394,41 @@ static void KPTsStateCB(int state) {
 
 - (int)start {
     if (!self.fTsStart) return -1;
-    int rc = self.fTsStart();
-    return rc;
+    [[KPLogger shared] logWithLevel:KPLogLevelDebug module:KPLogModuleTscore
+                             format:@"[core] TsStart 调用（线程=%@）", [NSThread currentThread].name ?: @"?"];
+    @try {
+        int rc = self.fTsStart();
+        return rc;
+    } @catch (NSException *e) {
+        [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleTscore
+                                 format:@"[core] TsStart 异常: %@", e];
+        return -1;
+    }
 }
 
 - (void)stop {
-    if (self.fTsStop) self.fTsStop();
+    if (self.fTsStop) {
+        @try {
+            self.fTsStop();
+        } @catch (NSException *e) {
+            [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleTscore
+                                     format:@"[core] TsStop 异常: %@", e];
+        }
+    }
 }
 
 - (int)loginWithAuthKey:(NSString *)authKey {
     if (!self.fTsLogin) return -1;
-    int rc = self.fTsLogin(authKey.UTF8String);
+    [[KPLogger shared] logWithLevel:KPLogLevelDebug module:KPLogModuleAuth
+                             format:@"[login] TsLogin 调用（线程=%@）", [NSThread currentThread].name ?: @"?"];
+    int rc = -1;
+    @try {
+        rc = self.fTsLogin(authKey.UTF8String);
+    } @catch (NSException *e) {
+        [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleAuth
+                                 format:@"[login] TsLogin 异常: %@", e];
+        rc = -1;
+    }
     [[KPLogger shared] stepCheckModule:KPLogModuleAuth name:@"TsLogin(AuthKey)" ok:(rc == 0)
                                  format:@"rc=%d", rc];
     return rc;
@@ -412,7 +436,13 @@ static void KPTsStateCB(int state) {
 
 - (int)needsLogin {
     if (!self.fTsNeedsLogin) return 1;
-    return self.fTsNeedsLogin();
+    @try {
+        return self.fTsNeedsLogin();
+    } @catch (NSException *e) {
+        [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleAuth
+                                 format:@"[login] TsNeedsLogin 异常: %@", e];
+        return 1;
+    }
 }
 
 - (NSString *)loginURL {
@@ -422,10 +452,17 @@ static void KPTsStateCB(int state) {
         return nil;
     }
     NSTimeInterval t0 = [NSDate timeIntervalSinceReferenceDate];
-    const char *p = self.fTsLoginURL();
+    NSString *s = nil;
+    @try {
+        const char *p = self.fTsLoginURL();
+        s = p ? @(p) : @"";
+        if (self.fTsFreeString) self.fTsFreeString(p);
+    } @catch (NSException *e) {
+        [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleAuth
+                                 format:@"[login] TsLoginURL 异常: %@", e];
+        s = @"";
+    }
     NSTimeInterval dt = [NSDate timeIntervalSinceReferenceDate] - t0;
-    NSString *s = p ? @(p) : @"";
-    if (self.fTsFreeString) self.fTsFreeString(p);
     [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleAuth
                              format:@"[login] TsLoginURL 返回=%@ 耗时=%.2fs", s.length ? s : @"(空)", dt];
     return s.length ? s : nil;
@@ -433,14 +470,27 @@ static void KPTsStateCB(int state) {
 
 - (int)isRunning {
     if (!self.fTsIsRunning) return 0;
-    return self.fTsIsRunning();
+    @try {
+        return self.fTsIsRunning();
+    } @catch (NSException *e) {
+        [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleTscore
+                                 format:@"[core] TsIsRunning 异常: %@", e];
+        return 0;
+    }
 }
 
 #pragma mark - 代理 / DERP-only
 
 - (int)setHttpProxy:(NSString *)proxyURL {
     if (!self.fTsSetHttpProxy) return -1;
-    int rc = self.fTsSetHttpProxy(proxyURL ? proxyURL.UTF8String : NULL);
+    int rc = -1;
+    @try {
+        rc = self.fTsSetHttpProxy(proxyURL ? proxyURL.UTF8String : NULL);
+    } @catch (NSException *e) {
+        [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleTscore
+                                 format:@"[core] TsSetHttpProxy 异常: %@", e];
+        rc = -1;
+    }
     [[KPLogger shared] stepCheckModule:KPLogModuleTscore name:@"TsSetHttpProxy" ok:(rc == 0)
                                  format:@"proxy=%@ rc=%d", proxyURL ?: @"(清空)", rc];
     return rc;

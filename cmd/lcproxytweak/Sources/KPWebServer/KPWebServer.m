@@ -198,14 +198,21 @@ int const KPWebServerDefaultPort = 19092;
         if (!authkey.length) {
             // 无 authkey：取交互登录 URL。AuthURL 仅在控制面握手成功后由服务器下发；
             // 若控制面不可达（如 400/被墙），AuthURL 为空 → 必须明确报错，不能假装完成。
-            NSTimeInterval t0 = [NSDate timeIntervalSinceReferenceDate];
-            NSString *url = [core loginURL];
-            NSTimeInterval dt = [NSDate timeIntervalSinceReferenceDate] - t0;
+            // 必须在 coreQueue 上调用（与 TsInit/TsStart 串行，避免 handler 线程直接进 cgo）。
+            __block NSString *url = nil;
+            __block int nl = 0, run = 0;
             [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleAuth
-                                     format:@"[login] loginURL 耗时=%.2fs url=%@", dt, url.length ? url : @"(空)"];
+                                     format:@"[login] 取 AuthURL（coreQueue 串行，线程=%@）", [NSThread currentThread].name ?: @"?"];
+            dispatch_sync([core coreQueue], ^{
+                NSTimeInterval t0 = [NSDate timeIntervalSinceReferenceDate];
+                url = [core loginURL];
+                NSTimeInterval dt = [NSDate timeIntervalSinceReferenceDate] - t0;
+                [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleAuth
+                                         format:@"[login] loginURL 耗时=%.2fs url=%@", dt, url.length ? url : @"(空)"];
+                nl = [core needsLogin];
+                run = [core isRunning];
+            });
             if (!url.length) {
-                int nl = [core needsLogin];
-                int run = [core isRunning];
                 [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleAuth
                                          format:@"[login] AuthURL 为空! needsLogin=%d running=%d → 控制面握手失败（查看 tailscaled 日志）", nl, run];
                 NSString *hint = nl ? @"获取登录 URL 失败：控制面握手未完成（被墙/代理拒绝），请检查上游代理设置"
