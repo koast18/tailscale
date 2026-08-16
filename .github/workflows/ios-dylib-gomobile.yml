@@ -1,0 +1,210 @@
+# gomobile ObjC-wrapped dylib.
+#
+# Builds the Tailscale core with gomobile bind (Objective-C API) on top of the
+# c-shared Go mechanism, then verifies dlopen + ObjC class usage in the iOS
+# simulator:
+#
+#   1. patched Go toolchain: enable ios/arm64 -buildmode=c-shared
+#      (cmd/tscore/patches/toolchain/ios-cshared.patch)
+#   2. patched gomobile: build the gobind bridge with -buildmode=c-shared and
+#      compile the generated Objective-C glue INTO the dylib, so the ObjC
+#      classes exist inside the dlopen-able dylib
+#      (cmd/tscore/patches/toolchain/gomobile-cshared.patch)
+#   3. gomobile bind -target=ios for cmd/tscore/bind -> TsCore.xcframework
+#   4. simulator host app dlopens the framework dylib and drives the
+#      TsCore* ObjC classes via NSClassFromString, printing results.
+name: gomobile ObjC dylib
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gomobile:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Apply in-repo patches
+        run: |
+          set -euxo pipefail
+          for p in cmd/tscore/patches/*.patch; do git apply "$p"; done
+
+      - name: Build patched Go toolchain (ios c-shared support)
+        run: |
+          set -euxo pipefail
+          GOTOOLCHAIN_VER="$(grep '^go ' go.mod | awk '{print $2}')"
+          curl -fsSL "https://go.dev/dl/go${GOTOOLCHAIN_VER}.src.tar.gz" -o /tmp/go.src.tar.gz
+          tar -C /tmp -xzf /tmp/go.src.tar.gz
+          cd /tmp/go
+          git init -q
+          git apply "$GITHUB_WORKSPACE/cmd/tscore/patches/toolchain/ios-cshared.patch"
+          cd /tmp/go/src
+          GOROOT_BOOTSTRAP="$(go env GOROOT)" ./make.bash
+          /tmp/go/bin/go version
+
+      - name: Build patched gomobile
+        run: |
+          set -euxo pipefail
+          export PATH="/tmp/go/bin:$PATH"
+          export GOTOOLCHAIN=local
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          GMOD_DIR="$(go env GOMODCACHE)/golang.org/x/mobile@latest"
+          ls -d "$GMOD_DIR" 2>/dev/null || GMOD_DIR="$(ls -d "$(go env GOMODCACHE)"/golang.org/x/mobile@* | head -1)"
+          echo "gomobile source: $GMOD_DIR"
+          mkdir -p /tmp/gm/src && cp -r "$GMOD_DIR"/* /tmp/gm/src/
+          chmod -R u+w /tmp/gm/src
+          cd /tmp/gm/src
+          git init -q && git add -A
+          git apply "$GITHUB_WORKSPACE/cmd/tscore/patches/toolchain/gomobile-cshared.patch"
+          mkdir -p /tmp/gm/bin
+          (cd cmd/gomobile && go build -o /tmp/gm/bin/gomobile .)
+          /tmp/gm/bin/gomobile version || true
+          export PATH="/tmp/gm/bin:$PATH"
+          gomobile init
+          echo "/tmp/gm/bin" >> "$GITHUB_PATH"
+
+      - name: gomobile bind (ObjC framework, c-shared core)
+        continue-on-error: true
+        run: |
+          set -uxo pipefail
+          export PATH="/tmp/gm/bin:/tmp/go/bin:$PATH"
+          export GOTOOLCHAIN=local
+          export PATH="$HOME/go/bin:$PATH"
+          mkdir -p dist
+          gomobile bind -target=ios -prefix TsCore \
+            -o dist/TsCore.xcframework tailscale.com/cmd/tscore/bind
+          echo "=== xcframework layout ==="
+          find dist/TsCore.xcframework -maxdepth 4 -type f | head -30
+          echo "=== framework dylib files ==="
+          for dylib in $(find dist/TsCore.xcframework -name 'TsCore' -type f); do
+            echo "--- $dylib ---"
+            file "$dylib"
+            echo "--- init sections ---"
+            otool -l "$dylib" | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(no init sections)"
+            echo "--- ObjC classes (TsCore) ---"
+            nm "$dylib" 2>/dev/null | grep -iE "TsCoreServer|OBJC_CLASS" | head -10
+            echo "--- gobind C exports ---"
+            nm -gU "$dylib" 2>/dev/null | grep -E "gobind_|TsVersion|TsInit" | head -8
+          done
+          echo "=== generated ObjC header (first 120 lines) ==="
+          HDR=$(find dist/TsCore.xcframework -name '*.h' | head -1)
+          echo "header: $HDR"
+          sed -n 1,120p "$HDR" 2>/dev/null || true
+
+      - name: Build device ObjC dylib (lazy variant) for delivery
+        continue-on-error: true
+        run: |
+          set -uxo pipefail
+          DEV=$(find dist/TsCore.xcframework -path '*ios-arm64*' -name 'TsCore' -type f | head -1)
+          if [ -z "$DEV" ]; then echo "no device slice"; exit 0; fi
+          cp "$DEV" dist/TsCoreObjC-device.dylib
+          python3 cmd/tscore/tools/stripinits.py dist/TsCoreObjC-device.dylib 2>/dev/null || true
+          codesign -s - --force dist/TsCoreObjC-device.dylib
+          file dist/TsCoreObjC-device.dylib
+
+      - name: Simulator dlopen test of ObjC dylib (host app)
+        run: |
+          set -uxo pipefail
+          SIM=$(find dist/TsCore.xcframework -path '*iossimulator*arm64*' -name 'TsCore' -type f | head -1)
+          if [ -z "$SIM" ]; then echo "no simulator slice; skipping"; exit 0; fi
+          echo "sim dylib: $SIM"
+          cp "$SIM" dist/TsCoreObjC-sim.dylib
+          APP="dist/TsCoreObjCVerify.app"
+          rm -rf "$APP"; mkdir -p "$APP"
+          SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          cat > /tmp/objc_test.m <<'EOF'
+          #import <UIKit/UIKit.h>
+          #import <dlfcn.h>
+          #import <objc/runtime.h>
+          
+          @interface AppDelegate : UIResponder <UIApplicationDelegate>
+          @property(nonatomic, strong) UIWindow *window;
+          @end
+          
+          @implementation AppDelegate
+          - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)opts {
+          NSLog(@"OBJCTEST-START");
+          NSString *dylib = [[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"TsCoreObjC-sim.dylib"];
+          void *h = dlopen(dylib.UTF8String, RTLD_NOW);
+          if (!h) { NSLog(@"OBJCTEST-FAIL dlopen: %s", dlerror()); return YES; }
+          NSLog(@"OBJCTEST-OK dlopen");
+          Class serverCls = NSClassFromString(@"TsCoreServer");
+          if (!serverCls) { NSLog(@"OBJCTEST-FAIL NSClassFromString TsCoreServer"); return YES; }
+          NSLog(@"OBJCTEST-OK class TsCoreServer");
+          id srv = [serverCls newServerWithStateDir:[[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"tsstate"] hostname:@"verify-objc" error:NULL];
+          if (!srv) { NSLog(@"OBJCTEST-FAIL newServer"); return YES; }
+          NSLog(@"OBJCTEST-OK newServer");
+          id ver = [srv versionString];
+          NSLog(@"OBJCTEST-INFO versionString=%@", ver);
+          NSLog(@"OBJCTEST-PASS");
+          return YES;
+          }
+          @end
+          
+          int main(int argc, char *argv[]) {
+          @autoreleasepool {
+          return UIApplicationMain(argc, argv, nil, NSStringFromClass([AppDelegate class]));
+          }
+          }
+          EOF
+          clang -arch arm64 -isysroot "${SDK}" -mios-simulator-version-min=15.0 -fobjc-arc \
+            /tmp/objc_test.m -framework UIKit -framework Foundation -framework CoreGraphics \
+            -o "$APP/TsCoreObjCVerify"
+          codesign -s - --force "$APP/TsCoreObjCVerify"
+          cat > "$APP/Info.plist" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>CFBundleExecutable</key><string>TsCoreObjCVerify</string>
+          <key>CFBundleIdentifier</key><string>dev.koast18.tscoreobjcverify</string>
+          <key>CFBundleName</key><string>TsCoreObjCVerify</string>
+          <key>CFBundlePackageType</key><string>APPL</string>
+          <key>CFBundleShortVersionString</key><string>1.0</string>
+          <key>CFBundleVersion</key><string>1</string>
+          <key>MinimumOSVersion</key><string>15.0</string>
+          <key>UILaunchScreen</key><dict/>
+          </dict></plist>
+          EOF
+          cp "$SIM" "$APP/TsCoreObjC-sim.dylib"
+          UDID="$(python3 - <<'EOF'
+          import json, subprocess
+          out = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
+          devs = [d for ds in out.get("devices", {}).values() for d in ds if d.get("isAvailable") and d.get("name", "").startswith("iPhone")]
+          print(devs[0]["udid"] if devs else "")
+          EOF
+          )"
+          echo "UDID=$UDID"
+          xcrun simctl shutdown "$UDID" 2>/dev/null || true
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch --console "$UDID" dev.koast18.tscoreobjcverify > sim-objc.log 2>&1 &
+          LPID=$!
+          ( sleep 60; kill -9 "$LPID" 2>/dev/null ) &
+          KPID=$!
+          wait "$LPID" 2>/dev/null || true
+          kill "$KPID" 2>/dev/null || true
+          sleep 2
+          echo "=== objc test console ==="
+          cat sim-objc.log || true
+          echo "===== results ====="
+          grep -E "OBJCTEST-PASS|OBJCTEST-FAIL|OBJCTEST-OK|OBJCTEST-INFO" sim-objc.log | head -20 || echo "(no objc test lines)"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gomobile-dylibs
+          path: |
+            dist/TsCoreObjC-*
+            sim-objc.log
+          if-no-files-found: ignore

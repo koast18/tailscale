@@ -1,0 +1,54 @@
+diff --git a/cmd/gomobile/bind_iosapp.go b/cmd/gomobile/bind_iosapp.go
+--- a/cmd/gomobile/bind_iosapp.go
++++ b/cmd/gomobile/bind_iosapp.go
+@@ -374,6 +374,49 @@ func appleArchiveFilepath(name string, t targetInfo) string {
+ 	return filepath.Join(tmpdir, name+"-"+t.platform+"-"+t.arch+".a")
+ }
+ 
++// ccFlagsFromEnv extracts the -arch and the min-version flag from the build
++// environment's CGO_CFLAGS (set per target, e.g. arm64 for device/arm64-sim
++// and -mios-simulator-version-min for simulator targets).
++func ccFlagsFromEnv(env []string) (arch, minver string) {
++	arch, minver = "arm64", "-mios-version-min=15.0"
++	for _, e := range env {
++		if strings.HasPrefix(e, "CGO_CFLAGS=") {
++			f := strings.Fields(strings.TrimPrefix(e, "CGO_CFLAGS="))
++			for i := 0; i+1 < len(f); i++ {
++				if f[i] == "-arch" {
++					arch = f[i+1]
++				}
++			}
++			for i := 0; i < len(f); i++ {
++				if strings.HasPrefix(f[i], "-mios") && strings.HasSuffix(f[i], "version-min=") && i+1 < len(f) {
++					minver = f[i] + f[i+1]
++				}
++			}
++		}
++	}
++	return arch, minver
++}
++
+ func goAppleBindArchive(out string, env []string, gosrc string) error {
+-	return goBuildAt(gosrc, "./gobind", env, "-buildmode=c-archive", "-o", out)
++	// Compile the generated Objective-C glue into the dylib so the ObjC
++	// classes are available after dlopen (no host-side compilation needed).
++	// Requires -buildmode=c-shared on ios, enabled by the Go toolchain patch
++	// (cmd/tscore/patches/toolchain/ios-cshared.patch).
++	gobindDir := filepath.Join(gosrc, "gobind")
++	if glueFiles, _ := filepath.Glob(filepath.Join(gobindDir, "*.objc.m")); len(glueFiles) > 0 {
++		sdk := getenv(env, "DARWIN_SDK")
++		arch, minver := ccFlagsFromEnv(env)
++		ccArgs := []string{"clang", "-c", "-fobjc-arc", "-arch", arch,
++			"-isysroot", sdk, minver, "-I", gobindDir}
++		ccArgs = append(ccArgs, glueFiles...)
++		glueO := filepath.Join(gosrc, "glue.o")
++		ccArgs = append(ccArgs, "-o", glueO)
++		if err := runCmd(exec.Command("xcrun", ccArgs...)); err != nil {
++			return err
++		}
++		env = append(env,
++			"CGO_LDFLAGS=-arch "+arch+" -isysroot "+sdk+" "+minver+" "+
++				"-framework Foundation -framework CoreFoundation "+glueO)
++	}
++	return goBuildAt(gosrc, "./gobind", env, "-buildmode=c-shared", "-o", out)
+ }
