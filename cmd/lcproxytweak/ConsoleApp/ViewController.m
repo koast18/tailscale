@@ -16,7 +16,7 @@ static NSString *const KPCConsoleURL = @"http://127.0.0.1:19092/";
 @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) UIView *errorView;
 @property (nonatomic, strong) UITextView *logView;
-@property (nonatomic, strong) UIButton *copyLogButton;
+@property (nonatomic, strong) UIButton *logCopyButton;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, assign) BOOL loadedOnce;
 @property (nonatomic, copy) NSString *lastFullLog;
@@ -84,9 +84,9 @@ static NSString *const KPCConsoleURL = @"http://127.0.0.1:19092/";
 - (void)copyLog {
     UIPasteboard *pb = [UIPasteboard generalPasteboard];
     pb.string = self.lastFullLog ?: @"";
-    [self.copyLogButton setTitle:@"已复制 ✓" forState:UIControlStateNormal];
+    [self.logCopyButton setTitle:@"已复制 ✓" forState:UIControlStateNormal];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        [self.copyLogButton setTitle:@"📋 复制日志" forState:UIControlStateNormal];
+        [self.logCopyButton setTitle:@"📋 复制日志" forState:UIControlStateNormal];
     });
 }
 
@@ -114,13 +114,13 @@ static NSString *const KPCConsoleURL = @"http://127.0.0.1:19092/";
     [self.errorView addSubview:self.logView];
 
     // 复制日志按钮
-    self.copyLogButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.copyLogButton.frame = CGRectMake(20, CGRectGetHeight(self.view.bounds) - 56, 140, 40);
-    self.copyLogButton.autoresizingMask = UIViewAutoresizingFlexibleTopMargin;
-    [self.copyLogButton setTitle:@"📋 复制日志" forState:UIControlStateNormal];
-    self.copyLogButton.titleLabel.font = [UIFont systemFontOfSize:15];
-    [self.copyLogButton addTarget:self action:@selector(copyLog) forControlEvents:UIControlEventTouchUpInside];
-    [self.errorView addSubview:self.copyLogButton];
+    self.logCopyButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.logCopyButton.frame = CGRectMake(20, CGRectGetHeight(self.view.bounds) - 56, 140, 40);
+    self.logCopyButton.autoresizingMask = UIViewAutoresizingFlexibleTopMargin;
+    [self.logCopyButton setTitle:@"📋 复制日志" forState:UIControlStateNormal];
+    self.logCopyButton.titleLabel.font = [UIFont systemFontOfSize:15];
+    [self.logCopyButton addTarget:self action:@selector(copyLog) forControlEvents:UIControlEventTouchUpInside];
+    [self.errorView addSubview:self.logCopyButton];
     [self.view addSubview:self.errorView];
 }
 
