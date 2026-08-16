@@ -98,7 +98,7 @@ cmd/tscore/
   `TsCore.xcframework` whose binaries are dlopen-able dylibs with the `TsCore*`
   ObjC classes inside; verified on the **iOS 18.6 simulator** by dlopening the
   dylib, dlsym-ing the exported C entry points and calling ObjC methods
-  (run #31922934487):
+  (run #31923417922):
 
   ```
   OBJCTEST-OK dlopen
