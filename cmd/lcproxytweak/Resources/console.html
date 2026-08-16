@@ -368,7 +368,7 @@ $("btn-ipcheck").onclick=async()=>{
     $("kg-ipmsg").textContent="检测中… 已等待 "+s+" 秒（每个目标最多 10s）";
   },3000);
   try{
-    const r=await api("/api/ipcheck");
+    const r=await api("/api/ipcheck",{method:"POST"});
     clearInterval(iv);
     if(r.error){
       $("kg-ipmsg").textContent="失败: "+r.error;
@@ -426,7 +426,7 @@ $("btn-logout").onclick=async()=>{
 
 $("btn-check").onclick=async()=>{
   $("up-msg").textContent="检查中…";
-  const r=await api("/api/core/check");
+  const r=await api("/api/core/check",{method:"POST"});
   $("up-latest").textContent=r.latestVersion||"—";
   $("up-msg").textContent=r.error?("失败: "+r.error):("最新: "+(r.latestVersion||"—")+(r.upToDate?"（已是最新）":""));
 };
