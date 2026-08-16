@@ -412,8 +412,19 @@ static void KPTsStateCB(int state) {
 }
 
 - (NSString *)loginURL {
-    if (!self.fTsLoginURL) return nil;
-    return [self stringFromCTs:self.fTsLoginURL()];
+    if (!self.fTsLoginURL) {
+        [[KPLogger shared] logWithLevel:KPLogLevelWarn module:KPLogModuleAuth
+                                 format:@"[login] TsLoginURL 符号缺失"];
+        return nil;
+    }
+    NSTimeInterval t0 = [NSDate timeIntervalSinceReferenceDate];
+    const char *p = self.fTsLoginURL();
+    NSTimeInterval dt = [NSDate timeIntervalSinceReferenceDate] - t0;
+    NSString *s = p ? @(p) : @"";
+    if (self.fTsFreeString) self.fTsFreeString(p);
+    [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleAuth
+                             format:@"[login] TsLoginURL 返回=%@ 耗时=%.2fs", s.length ? s : @"(空)", dt];
+    return s.length ? s : nil;
 }
 
 - (int)isRunning {

@@ -189,18 +189,41 @@ int const KPWebServerDefaultPort = 19092;
         NSDictionary *body = [weakSelf jsonBody:request];
         NSString *authkey = body[@"authkey"];
         KPTsCore *core = [KPTsCore shared];
+        [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleAuth
+                                 format:@"[login] 请求: authkey=%@", authkey.length ? "(有)" : "(无)"];
         if (!core.loaded) {
+            [[KPLogger shared] logWithLevel:KPLogLevelWarn module:KPLogModuleAuth format:@"[login] core 未加载"];
             return [weakSelf jsonError:@"TailscaleCore 未加载" statusCode:409];
         }
         if (!authkey.length) {
+            // 无 authkey：取交互登录 URL。AuthURL 仅在控制面握手成功后由服务器下发；
+            // 若控制面不可达（如 400/被墙），AuthURL 为空 → 必须明确报错，不能假装完成。
+            NSTimeInterval t0 = [NSDate timeIntervalSinceReferenceDate];
             NSString *url = [core loginURL];
-            return [weakSelf json:@{@"loginURL": url ?: @""}];
+            NSTimeInterval dt = [NSDate timeIntervalSinceReferenceDate] - t0;
+            [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleAuth
+                                     format:@"[login] loginURL 耗时=%.2fs url=%@", dt, url.length ? url : @"(空)"];
+            if (!url.length) {
+                int nl = [core needsLogin];
+                int run = [core isRunning];
+                [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleAuth
+                                         format:@"[login] AuthURL 为空! needsLogin=%d running=%d → 控制面握手失败（查看 tailscaled 日志）", nl, run];
+                NSString *hint = nl ? @"获取登录 URL 失败：控制面握手未完成（被墙/代理拒绝），请检查上游代理设置"
+                                    : @"当前节点已登录（无需登录）";
+                return [weakSelf jsonError:hint statusCode:502];
+            }
+            return [weakSelf json:@{@"loginURL": url}];
         }
         // TsLogin 同步 ≤2min，放后台队列避免阻塞 HTTP
+        [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleAuth
+                                 format:@"[login] TsLogin(authkey) 入队（≤2min）"];
         dispatch_async(weakSelf.loginQueue, ^{
+            NSTimeInterval t0 = [NSDate timeIntervalSinceReferenceDate];
             int rc = [core loginWithAuthKey:authkey];
+            NSTimeInterval dt = [NSDate timeIntervalSinceReferenceDate] - t0;
             [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleAuth
-                                     format:@"异步登录完成 rc=%d", rc];
+                                     format:@"[login] TsLogin 返回 rc=%d 耗时=%.1fs needsLogin=%@", rc, dt,
+                                            @([[core needsLogin] == 1])];
         });
         return [weakSelf json:@{@"status": @"async", @"message": @"登录进行中（≤2分钟）"}];
     }];
@@ -305,7 +328,13 @@ int const KPWebServerDefaultPort = 19092;
         int proxyPort = king.proxyPortFromConfig;
         NSString *guid = king.guid;
         NSString *token = king.token;
+        [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleKing
+                                 format:@"[ipcheck] 开始: 上游=%@:%d guid=%@ token=%c…",
+                                        proxyHost, proxyPort, guid,
+                                        token.length ? [token characterAtIndex:0] : '?'];
         if (!guid.length || !token.length) {
+            [[KPLogger shared] logWithLevel:KPLogLevelWarn module:KPLogModuleKing
+                                     format:@"[ipcheck] 无凭证，拒绝（先取号）"];
             return [self jsonError:@"无凭证：请先取号（立即刷新凭证）" statusCode:409];
         }
         // 经免流网关 CONNECT 到 IP 服务，取出口 IP
@@ -314,20 +343,34 @@ int const KPWebServerDefaultPort = 19092;
             {"api.ipify.org", "80", "/"},
         };
         NSString *ip = nil;
+        NSString *lastDiag = @"";
         for (size_t i = 0; i < 2 && !ip; i++) {
             char body[1024] = {0};
+            char recent[4096] = {0};
+            NSTimeInterval t0 = [NSDate timeIntervalSinceReferenceDate];
+            [[KPLogger shared] logWithLevel:KPLogLevelDebug module:KPLogModuleKing
+                                     format:@"[ipcheck] target[%zu]=%s%s 开始…", i, targets[i][0], targets[i][2]];
             int rc = kp_http_get_via_proxy(proxyHost.UTF8String, proxyPort,
                                            targets[i][0], atoi(targets[i][1]), targets[i][2],
                                            guid.UTF8String, token.UTF8String,
                                            10000, body, sizeof(body));
-            if (rc == 0) {
-                NSString *s = [@(body) stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-                if (s.length >= 7) ip = s; // 粗校验像 IP
-            }
+            NSTimeInterval dt = [NSDate timeIntervalSinceReferenceDate] - t0;
+            kp_debug_recent(recent, sizeof(recent));
+            lastDiag = [NSString stringWithUTF8String:recent] ?: @"";
+            NSString *s = [@(body) stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleKing
+                                     format:@"[ipcheck] target[%zu]=%s rc=%d 耗时=%.1fs body=%@",
+                                            i, targets[i][0], rc, dt, s.length ? s : @"(空)"];
+            if (rc == 0 && s.length >= 7) ip = s; // 粗校验像 IP
         }
         if (!ip) {
-            return [self jsonError:@"出口检测失败（经免流网关无法访问 IP 服务）" statusCode:502];
+            NSString *msg = [NSString stringWithFormat:@"出口检测失败\n%@", lastDiag];
+            [[KPLogger shared] logWithLevel:KPLogLevelError module:KPLogModuleKing
+                                     format:@"[ipcheck] 全部失败: %@", msg];
+            return [self jsonError:msg statusCode:502];
         }
+        [[KPLogger shared] logWithLevel:KPLogLevelInfo module:KPLogModuleKing
+                                 format:@"[ipcheck] 成功 ip=%@ via=proxy", ip];
         return [self json:@{
             @"ok": @YES,
             @"ip": ip,

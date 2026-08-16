@@ -97,6 +97,16 @@ static int KPForwarderRefreshHook(void *ctx) {
 }
 
 - (void)startWithConfig:(NSDictionary *)kingConfig {
+    // 注册 C 层调试日志（KPKIngCore 每步网络操作输出到这里）
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        kp_set_debug_logger(^(const char *line) {
+            if (!line || !line[0]) return;
+            NSString *s = [NSString stringWithUTF8String:line];
+            [[KPLogger shared] logWithLevel:KPLogLevelDebug module:KPLogModuleKing
+                                     format:@"[C] %@", s];
+        });
+    });
     self.config = kingConfig ?: @{};
     dispatch_async(self.workQueue, ^{
         [self startSync];

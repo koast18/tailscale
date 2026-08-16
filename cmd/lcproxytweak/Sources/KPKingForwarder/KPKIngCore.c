@@ -15,6 +15,46 @@
 #include <string.h>
 #include <strings.h>
 
+// ---------- 调试日志（宿主注册回调，真机可逐行定位） ----------
+static void (*g_kp_dbg_log)(const char *line) = NULL;
+static char g_kp_dbg_recent[8][512];   // 近期诊断环形缓冲（API 失败时回传）
+static int g_kp_dbg_recent_n = 0;
+
+void kp_set_debug_logger(void (*fn)(const char *line)) {
+    g_kp_dbg_log = fn;
+}
+
+void kp_debug_recent(char *out, size_t cap) {
+    if (!out || cap == 0) return;
+    out[0] = '\0';
+    size_t used = 0;
+    for (int i = 0; i < g_kp_dbg_recent_n && used < cap - 1; i++) {
+        const char *line = g_kp_dbg_recent[i];
+        size_t l = strlen(line);
+        if (used + l + 2 > cap - 1) break;
+        memcpy(out + used, line, l);
+        used += l;
+        out[used++] = '\n';
+        out[used] = '\0';
+    }
+}
+
+void kp_dbg(const char *fmt, ...) {
+    char line[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if (g_kp_dbg_log) g_kp_dbg_log(line);
+    // 环形缓冲
+    int idx = g_kp_dbg_recent_n < 8 ? g_kp_dbg_recent_n++ : 0;
+    if (g_kp_dbg_recent_n > 8) {
+        for (int i = 1; i < 8; i++) memcpy(g_kp_dbg_recent[i - 1], g_kp_dbg_recent[i], 512);
+        idx = 7;
+    }
+    snprintf(g_kp_dbg_recent[idx], 512, "%s", line);
+}
+
 #if defined(__APPLE__) || defined(__unix__)
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -346,6 +386,7 @@ int kp_parse_http_response(const char *buf, size_t len,
 // ---------- POSIX socket 工具 ----------
 
 static int kp_connect_host(const char *host, int port, int timeout_ms) {
+    kp_dbg("[conn] 开始连接 %s:%d timeout=%dms", host, port, timeout_ms);
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -370,6 +411,7 @@ static int kp_connect_host(const char *host, int port, int timeout_ms) {
     }
     freeaddrinfo(res);
     kp_socket_set_bypass(0);
+    kp_dbg("[conn] %s:%d -> fd=%d", host, port, fd);
     return fd;
 }
 
@@ -472,6 +514,7 @@ static int kp_do_fetch(int fd, const char *host, const char *path,
             if (strncmp(buf, "HTTP/", 5) == 0 && strchr(buf, ' ')) {
                 code = atoi(strchr(buf, ' ') + 1);
             }
+            kp_dbg("[fetch] GET %s %s -> HTTP %d, recv=%zu bytes", path, host, code, got);
             if (status_out) *status_out = code;
             char body[4096];
             size_t bodylen = 0;
@@ -580,13 +623,16 @@ static int kp_open_via_proxy(const char *host, int port, int timeout_ms, void *c
         KP_CLOSESOCK(fd);
         return -1;
     }
+    kp_dbg("[proxy] CONNECT %s:%d 已发送，等待响应…", host, port);
     char rbuf[2048];
     size_t rgot = 0;
     if (kp_recv_until(fd, rbuf, sizeof(rbuf), &rgot, timeout_ms) != 0 ||
         !kp_response_is_2xx(rbuf, rgot)) {
+        kp_dbg("[proxy] CONNECT %s:%d 失败: recv=%zu resp=%.80s", host, port, rgot, rgot ? rbuf : "(无响应/超时)");
         KP_CLOSESOCK(fd);
         return -1;
     }
+    kp_dbg("[proxy] CONNECT %s:%d 隧道建立: %.60s", host, port, rbuf);
     return fd;
 }
 
@@ -605,7 +651,11 @@ int kp_http_get_via_proxy(const char *upstream_host, int upstream_port,
                           const char *target_host, int target_port, const char *path,
                           const char *guid, const char *token,
                           int timeout_ms, char *out, size_t out_cap) {
-    if (!upstream_host || !target_host) return -1;
+    kp_dbg("[ipcheck] 入口: 上游=%s:%d 目标=%s:%d%s guid=%c… token=%c…",
+           upstream_host ? upstream_host : "(null)", upstream_port,
+           target_host ? target_host : "(null)", target_port, path ? path : "",
+           guid && guid[0] ? guid[0] : '?', token && token[0] ? token[0] : '?');
+    if (!upstream_host || !target_host) { kp_dbg("[ipcheck] 参数缺失"); return -1; }
     if (out && out_cap > 0) out[0] = '\0';
     struct proxy_ctx ctx = { upstream_host, upstream_port, guid, token };
     int fd = kp_open_via_proxy(target_host, target_port, timeout_ms, &ctx);
@@ -634,6 +684,7 @@ int kp_http_get_via_proxy(const char *upstream_host, int upstream_port,
         }
     }
     KP_CLOSESOCK(fd);
+    kp_dbg("[ipcheck] 完成: rc=%d out=%.40s", rc, out && out[0] ? out : "(空)");
     return rc;
 }
 

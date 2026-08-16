@@ -173,6 +173,13 @@ int kp_forwarder_is_running(kp_forwarder *fw);
 /// 监听端口。
 int kp_forwarder_port(kp_forwarder *fw);
 
+// ---------- 调试日志 ----------
+/// 宿主注册日志回调（每步网络操作都会输出，真机调试用）
+void kp_set_debug_logger(void (*fn)(const char *line));
+
+/// 取近期诊断（环形缓冲，最近 8 条，换行分隔；API 失败时回传给前端）
+void kp_debug_recent(char *out, size_t cap);
+
 #ifdef __cplusplus
 }
 #endif

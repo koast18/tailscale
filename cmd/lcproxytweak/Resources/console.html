@@ -354,13 +354,25 @@ $("btn-kg-proxy").onclick=async()=>{
 
 $("btn-ipcheck").onclick=async()=>{
   $("kg-ipmsg").textContent="检测中(经免流网关)…";
-  const r=await api("/api/ipcheck");
-  if(r.error){
-    $("kg-ipmsg").textContent="失败: "+r.error;
-  }else{
-    $("kg-ip").textContent=r.ip;
-    $("kg-ipat").textContent=r.at||"";
-    $("kg-ipmsg").textContent="经免流网关出口 IP（直连对比：关免流后再测一次）";
+  // 每 3 秒更新等待提示，避免看起来卡死
+  var t0=Date.now();
+  var iv=setInterval(()=>{
+    var s=Math.round((Date.now()-t0)/1000);
+    $("kg-ipmsg").textContent="检测中… 已等待 "+s+" 秒（每个目标最多 10s）";
+  },3000);
+  try{
+    const r=await api("/api/ipcheck");
+    clearInterval(iv);
+    if(r.error){
+      $("kg-ipmsg").textContent="失败: "+r.error;
+    }else{
+      $("kg-ip").textContent=r.ip;
+      $("kg-ipat").textContent=r.at||"";
+      $("kg-ipmsg").textContent="经免流网关出口 IP（直连对比：关免流后再测一次）";
+    }
+  }catch(e){
+    clearInterval(iv);
+    $("kg-ipmsg").textContent="请求异常: "+e;
   }
 };
 
@@ -382,8 +394,20 @@ $("btn-login").onclick=async()=>{
   }
   const key=$("ts-authkey").value.trim();
   $("ts-loginmsg").textContent=key?"登录中(≤2分钟)…":"获取登录 URL…";
-  const r=await api("/api/login",{method:"POST",body:JSON.stringify({authkey:key})});
-  $("ts-loginmsg").textContent=r.error?("失败: "+r.error):(r.loginURL?("请用浏览器打开: "+r.loginURL):"登录完成");
+  try{
+    const r=await api("/api/login",{method:"POST",body:JSON.stringify({authkey:key})});
+    if(r.error){
+      $("ts-loginmsg").textContent="失败: "+r.error;
+    }else if(r.loginURL){
+      $("ts-loginmsg").textContent="请用浏览器打开: "+r.loginURL;
+    }else if(r.status==="async"){
+      $("ts-loginmsg").textContent=r.message||"登录进行中…（详见 KingProxy/logs 日志）";
+    }else{
+      $("ts-loginmsg").textContent="返回未知响应: "+JSON.stringify(r);
+    }
+  }catch(e){
+    $("ts-loginmsg").textContent="请求异常: "+e;
+  }
   loadStatus();
 };
 
