@@ -147,16 +147,17 @@ jobs:
           void *h = dlopen(dylib.UTF8String, RTLD_NOW);
           if (!h) { NSLog(@"OBJCTEST-FAIL dlopen: %s", dlerror()); return YES; }
           NSLog(@"OBJCTEST-OK dlopen");
-          Class pkgCls = NSClassFromString(@"TsCoreTscorebind");
-          if (!pkgCls) { NSLog(@"OBJCTEST-FAIL NSClassFromString TsCoreTscorebind"); return YES; }
-          NSLog(@"OBJCTEST-OK class TsCoreTscorebind");
-          id srv = [pkgCls newServerWithStateDir:[[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"tsstate"] hostname:@"verify-objc" error:NULL];
-          if (!srv) { NSLog(@"OBJCTEST-FAIL newServer"); return YES; }
-          NSLog(@"OBJCTEST-OK newServer");
-          id ver = [pkgCls versionString];
+          // Package-level Go functions are exported as C functions by gomobile
+          // (TsCoreTscorebindNewServer / TsCoreTscorebindVersionString), so
+          // resolve them via dlsym after dlopen.
+          NSString *stateDir = [[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"tsstate"];
+          TsCoreTscorebindServer *srv = TsCoreTscorebindNewServer(stateDir, @"verify-objc", NULL);
+          if (!srv) { NSLog(@"OBJCTEST-FAIL TsCoreTscorebindNewServer"); return YES; }
+          NSLog(@"OBJCTEST-OK TsCoreTscorebindNewServer");
+          NSString *ver = TsCoreTscorebindVersionString();
           NSLog(@"OBJCTEST-INFO versionString=%@", ver);
-          id running = [srv isRunning];
-          NSLog(@"OBJCTEST-INFO isRunning=%@", running);
+          BOOL running = [srv isRunning];
+          NSLog(@"OBJCTEST-INFO isRunning=%d", (int)running);
           NSLog(@"OBJCTEST-PASS");
           return YES;
           }
