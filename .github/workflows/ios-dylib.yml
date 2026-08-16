@@ -1,10 +1,21 @@
-# Builds libTailscaleCore.dylib (arm64 + arm64e, iOS 15+), the Tailscale
-# core dynamic library for sideloading (LiveContainer-style hosts).
+# Builds and publishes the iOS Tailscale core dylib for sideloading.
 #
-# Triggers:
-#   - push of a tag: only the LATEST tag that does NOT end with "-pre"
-#     actually builds. Pre-releases and older tags are skipped.
-#   - workflow_dispatch: manual build (always runs).
+# Mechanism: -buildmode=c-shared on ios/arm64, enabled by a 2-line Go
+# toolchain patch (cmd/tscore/patches/toolchain/ios-cshared.patch). c-shared
+# emits the load-time initializer (__TEXT,__init_offsets), so dyld starts the
+# Go runtime at dlopen and every exported Ts* function is callable. This is
+# verified on the iOS simulator by .github/workflows/ios-dylib-cshared.yml.
+#
+# Deliverables (uploaded + released):
+#   libTailscaleCore.dylib        - C ABI dylib (ctor starts runtime at dlopen)
+#   libTailscaleCore-lazy.dylib   - same, initializer stripped; host calls
+#                                   TsEnsureInit() after dlopen
+#   TsCoreVerify.ipa              - host app that dlopens the dylib and runs
+#                                   the exported-call verification on-device
+#                                   (cmd/tscore/hostapp)
+#   libTailscaleCore.h            - generated C header (all Ts* exports)
+#
+# Triggers: workflow_dispatch; push of a v* tag.
 name: iOS Tailscale Core dylib
 
 on:
@@ -12,190 +23,105 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
-    inputs:
-      build_probe:
-        type: boolean
-        default: false
-        description: >-
-          Also build ProbeMinimal.dylib (no tailscale deps) to bisect the
-          iOS dlopen hang (Go-runtime issue vs tailscale package inits).
-  # Reusable: sync-upstream-release.yml calls this with release_tag set.
-  workflow_call:
-    inputs:
-      release_tag:
-        type: string
-        required: false
-        description: >-
-          Release version tag. When set (workflow_call from the upstream
-          sync), the GitHub Release is named after it. Otherwise the push tag
-          is used; workflow_dispatch falls back to manual-<timestamp>.
 
 permissions:
   contents: write
 
 jobs:
   build-ios-dylib:
-    runs-on: macos-latest
+    runs-on: macos-15
+    timeout-minutes: 90
     steps:
-      - name: Skip non-latest / pre-release tags
-        if: github.event_name == 'push'
-        run: |
-          CURRENT="$GITHUB_REF_NAME"
-          # List all tags on the remote, drop peeled ^{} entries, drop any
-          # tag ending in "-pre", then take the highest semantic version.
-          LATEST="$(git ls-remote --tags "https://github.com/${GITHUB_REPOSITORY}.git" \
-            | awk -F/ '{print $NF}' \
-            | grep -v '\^{}' \
-            | grep -v -- '-pre$' \
-            | sort -V \
-            | tail -n1)"
-          echo "CURRENT_TAG=$CURRENT"
-          echo "LATEST_NON_PRE_TAG=$LATEST"
-          if [ -z "$LATEST" ] || [ "$CURRENT" != "$LATEST" ]; then
-            echo "::notice::Tag $CURRENT is not the latest non-pre tag ($LATEST); skipping build."
-            echo "SKIP_BUILD=1" >> "$GITHUB_ENV"
-          fi
+      - uses: actions/checkout@v4
 
-      - name: Checkout
-        if: env.SKIP_BUILD != '1'
-        uses: actions/checkout@v4
-
-      - name: Apply upstream patches
-        if: env.SKIP_BUILD != '1'
-        run: |
-          set -euxo pipefail
-          for p in cmd/tscore/patches/*.patch; do
-            echo "Applying $p"
-            git apply "$p"
-          done
-        # Patches touch tailscale upstream sources (e.g. magicsock
-        # debugknobs) without committing modifications; they are applied
-        # here so the Go build below uses the patched tree.
-
-      - name: Set up Go
-        if: env.SKIP_BUILD != '1'
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
-          # tailscale's go.mod pins go 1.26.6; setup-go aligns and Go itself
-          # auto-downloads the toolchain if needed.
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: go vet (patched tree)
-        if: env.SKIP_BUILD != '1'
+      - name: Apply in-repo patches
         run: |
           set -euxo pipefail
-          go vet ./cmd/tscore ./wgengine/magicsock
-          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
-          CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
-          CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
-          go vet ./cmd/tscore
+          for p in cmd/tscore/patches/*.patch; do git apply "$p"; done
 
-      - name: Build arm64
-        if: env.SKIP_BUILD != '1'
+      - name: Build patched Go toolchain (ios c-shared support)
         run: |
           set -euxo pipefail
-          mkdir -p dist
+          GOTOOLCHAIN_VER="$(grep '^go ' go.mod | awk '{print $2}')"
+          curl -fsSL "https://go.dev/dl/go${GOTOOLCHAIN_VER}.src.tar.gz" -o /tmp/go.src.tar.gz
+          tar -C /tmp -xzf /tmp/go.src.tar.gz
+          cd /tmp/go
+          git init -q
+          git apply "$GITHUB_WORKSPACE/cmd/tscore/patches/toolchain/ios-cshared.patch"
+          cd /tmp/go/src
+          GOROOT_BOOTSTRAP="$(go env GOROOT)" ./make.bash
+          /tmp/go/bin/go version
+
+      - name: Build device dylibs (c-shared)
+        run: |
+          set -euxo pipefail
+          export PATH="/tmp/go/bin:$PATH"
+          export GOTOOLCHAIN=local
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mios-version-min=15.0"
-          # Go does NOT support -buildmode=c-shared on ios/arm64 (hardcoded in
-          # internal/platform); iOS only supports c-archive. The archive carries
-          # a __mod_init_func constructor that initializes the Go runtime at
-          # dyld load time, so we compile a static archive and then link it
-          # into a dylib below.
-          #
-          # arm64e: the official Go toolchain (incl. 1.26.x) has no ios/arm64e
-          # target at all, so the deliverable is a single arm64 slice.
-          # arm64e devices (A12+) run arm64 binaries natively via dyld's
-          # compatible-slice execution.
-          # Version stamping: TsVersion() reports the upstream VERSION.txt
-          # (as of the checked-out commit) plus the commit hash, e.g.
-          # 1.103.0-gcae406380. VERSION.txt is the pristine upstream file;
-          # the patch only touches wgengine/magicsock debugknobs.
-          VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || true)"
-          [ -n "$VERSION" ] || VERSION="dev"
+          mkdir -p dist
+          VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo dev)"
           HASH="$(git rev-parse --short HEAD)"
-          VERSION_FLAGS="-s -w -X main.coreVersion=${VERSION}-g${HASH}"
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
           CC="${CC}" \
           CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
           CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
-          go build -buildmode=c-archive -trimpath -ldflags "${VERSION_FLAGS}" \
-            -o dist/libTailscaleCore-arm64.a ./cmd/tscore
-
-      - name: Link arm64 dylib from archive
-        if: env.SKIP_BUILD != '1'
-        run: |
-          set -euxo pipefail
-          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          clang -dynamiclib \
-            -arch arm64 -isysroot "${SDK}" -mios-version-min=15.0 \
-            -Wl,-all_load -Wl,-ObjC \
-            dist/libTailscaleCore-arm64.a \
-            -framework Foundation \
-            -framework Security \
-            -framework CoreFoundation \
-            -o dist/libTailscaleCore.dylib
-
-      - name: Build lazy-init variant (no ctor; host calls TsEnsureInit)
-        if: env.SKIP_BUILD != '1'
-        run: |
-          set -euxo pipefail
-          # Same archive, but the final dylib has its initializer section
-          # stripped (cmd/tscore/tools/stripinits.py): dyld performs NO
-          # constructor at dlopen (avoids the pthread_create-under-dyld-lock
-          # deadlock on iOS), and the host starts the Go runtime by calling
-          # TsEnsureInit() once, right after dlopen returns.
-          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          clang -dynamiclib \
-            -arch arm64 -isysroot "${SDK}" -mios-version-min=15.0 \
-            -Wl,-all_load -Wl,-ObjC \
-            dist/libTailscaleCore-arm64.a \
-            -framework Foundation \
-            -framework Security \
-            -framework CoreFoundation \
-            -o dist/libTailscaleCore-lazy.dylib
+          go build -buildmode=c-shared -trimpath \
+            -ldflags "-s -w -X main.coreVersion=${VERSION}-g${HASH}" \
+            -o dist/libTailscaleCore.dylib ./cmd/tscore
+          # lazy variant: strip the initializer section; host calls TsEnsureInit()
+          cp dist/libTailscaleCore.dylib dist/libTailscaleCore-lazy.dylib
           python3 cmd/tscore/tools/stripinits.py dist/libTailscaleCore-lazy.dylib
-          codesign -s - --force dist/libTailscaleCore-lazy.dylib
-          echo "--- lazy init sections (must be gone) ---"
-          otool -l dist/libTailscaleCore-lazy.dylib | grep -E "__init_offsets|__mod_init_func" || echo "(no init sections: OK)"
-          echo "--- lazy exported symbols ---"
-          nm -gU dist/libTailscaleCore-lazy.dylib | grep -E "TsEnsureInit|_rt0_arm64_ios_lib|wait_runtime_init_done" || true
-
-      - name: Finalize dylib + header
-        if: env.SKIP_BUILD != '1'
-        run: |
-          set -euxo pipefail
-          file dist/libTailscaleCore.dylib
-          cp dist/libTailscaleCore-arm64.h dist/libTailscaleCore.h
-          rm -f dist/libTailscaleCore-arm64.a dist/libTailscaleCore-arm64.h
-
-      - name: Ad-hoc code sign
-        if: env.SKIP_BUILD != '1'
-        run: |
-          set -euxo pipefail
-          # iOS dyld requires at least an ad-hoc signature: a completely
-          # unsigned dylib fails with "mapped file has no cdhash ... Code has
-          # to be at least ad-hoc signed.". An ad-hoc signature itself is
-          # NOT enough to load (no trust chain), but it satisfies dyld's
-          # baseline check, and LiveContainer's "Sign All Tweaks" (force)
-          # will then re-sign the file with the user's imported certificate
-          # via ZSign, which is what makes it loadable.
           codesign -s - --force dist/libTailscaleCore.dylib
-          echo "--- codesign verification ---"
-          codesign -dv --verbose=2 dist/libTailscaleCore.dylib 2>&1 || true
+          codesign -s - --force dist/libTailscaleCore-lazy.dylib
+          file dist/libTailscaleCore.dylib
+          echo "--- init sections ---"
+          otool -l dist/libTailscaleCore.dylib | grep -A2 -E "__init_offsets|__mod_init_func" || echo "(none)"
+          echo "--- lazy init sections (must be gone) ---"
+          otool -l dist/libTailscaleCore-lazy.dylib | grep -E "__init_offsets|__mod_init_func" || echo "(none: OK)"
 
-      - name: Final sign with app p12 (optional)
-        if: env.SKIP_BUILD != '1' && env.SIGN_P12_B64 != ''
+      - name: Verify exported symbols
+        run: |
+          set -euxo pipefail
+          sort cmd/tscore/expected-symbols.txt -o /tmp/expected.txt
+          nm -gU dist/libTailscaleCore.dylib | awk '{print $NF}' | sed 's/^_//' \
+            | grep -E '^Ts[A-Z]' | sort -u > /tmp/actual.txt
+          echo "--- missing symbols (must be empty) ---"
+          comm -23 /tmp/expected.txt /tmp/actual.txt
+          MISSING="$(comm -23 /tmp/expected.txt /tmp/actual.txt)"
+          if [ -n "$MISSING" ]; then echo "::error::Missing: $MISSING"; exit 1; fi
+          echo "::notice::All $(wc -l < /tmp/expected.txt) expected Ts* symbols exported."
+
+      - name: Build TsCoreVerify host app (IPA)
+        run: |
+          set -euxo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          APP="dist/TsCoreVerify.app"
+          rm -rf "$APP"; mkdir -p "$APP"
+          clang -arch arm64 -isysroot "${SDK}" -mios-version-min=15.0 -fobjc-arc \
+            cmd/tscore/hostapp/main.m \
+            -framework UIKit -framework Foundation -framework CoreGraphics \
+            -o "$APP/TsCoreVerify"
+          cp cmd/tscore/hostapp/Info.plist "$APP/"
+          # lazy variant embedded: the app calls TsEnsureInit() after dlopen
+          cp dist/libTailscaleCore-lazy.dylib "$APP/libTailscaleCore-lazy.dylib"
+          codesign -s - --force "$APP/TsCoreVerify"
+          codesign -s - --force "$APP/libTailscaleCore-lazy.dylib"
+          cd dist && zip -qry TsCoreVerify.ipa TsCoreVerify.app && cd ..
+          file dist/TsCoreVerify.ipa
+
+      - name: Final p12 signing (optional)
+        if: env.SIGN_P12_B64 != ''
         env:
           SIGN_P12_B64: ${{ secrets.TSCORE_P12_B64 }}
           SIGN_P12_PASS: ${{ secrets.TSCORE_P12_PASSWORD }}
         run: |
           set -euxo pipefail
-          # If TSCORE_P12_B64/TSCORE_P12_PASSWORD secrets are set, sign the
-          # dylib with the host app's certificate here so it is loadable
-          # immediately (no device-side re-signing needed).
           echo "$SIGN_P12_B64" | base64 -d > /tmp/sign.p12
           KEYCHAIN=/tmp/tscore.keychain-db
           security create-keychain -p "" "$KEYCHAIN"
@@ -205,157 +131,51 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN"
           IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -o '"[^"]*"' | head -1 | tr -d '"')"
           codesign --force --sign "$IDENTITY" --timestamp=none dist/libTailscaleCore.dylib
-          echo "--- p12-signed verification ---"
-          codesign -dv --verbose=2 dist/libTailscaleCore.dylib 2>&1 || true
+          codesign --force --sign "$IDENTITY" --timestamp=none dist/libTailscaleCore-lazy.dylib
+          codesign --force --sign "$IDENTITY" --timestamp=none dist/TsCoreVerify.app
 
-      - name: Verify Mach-O format
-        if: env.SKIP_BUILD != '1'
+      - name: Generate header for C ABI dylib
         run: |
           set -euxo pipefail
-          file dist/libTailscaleCore.dylib
-          lipo -info dist/libTailscaleCore.dylib || true
-          echo "--- otool -L ---"
-          otool -L dist/libTailscaleCore.dylib
-
-      - name: Verify exported symbols
-        if: env.SKIP_BUILD != '1'
-        run: |
-          set -euxo pipefail
-          cat > /tmp/expected.txt <<'EOF'
-          TsClearExitNode
-          TsDebugDERPRegion
-          TsDeleteWaitingFile
-          TsFileTargets
-          TsFreeString
-          TsGetDerpOnly
-          TsGetExitNodeStatus
-          TsGetHttpProxy
-          TsGetPrefsJSON
-          TsGetWaitingFile
-          TsInit
-          TsIsRunning
-          TsListExitNodes
-          TsListPeers
-          TsLogin
-          TsLoginURL
-          TsNeedsLogin
-          TsNetcheck
-          TsPing
-          TsPushFile
-          TsSetDerpOnly
-          TsSetExitNode
-          TsSetExitNodeAllowLANAccess
-          TsSetHostname
-          TsSetHttpProxy
-          TsSetLogCallback
-          TsSetPrefsJSON
-          TsSetRouteAll
-          TsSetStateCallback
-          TsSocks5Addr
-          TsSocks5Cred
-          TsStart
-          TsStartLocalHTTPProxy
-          TsStatusDetailJSON
-          TsStop
-          TsStopLocalHTTPProxy
-          TsSuggestExitNode
-          TsTailscaleIPs
-          TsVersion
-          TsWaitingFiles
-          TsWhoIs
-          TsCurrentUser
-          TsEnsureInit
-          EOF
-          sort /tmp/expected.txt -o /tmp/expected.txt
-          nm -gU dist/libTailscaleCore.dylib \
-            | awk '{print $NF}' \
-            | sed 's/^_//' \
-            | grep -E '^Ts[A-Z]' \
-            | sort -u > /tmp/actual.txt
-          echo "--- missing symbols (must be empty) ---"
-          comm -23 /tmp/expected.txt /tmp/actual.txt
-          echo "--- extra Ts* symbols ---"
-          comm -13 /tmp/expected.txt /tmp/actual.txt
-          MISSING="$(comm -23 /tmp/expected.txt /tmp/actual.txt)"
-          if [ -n "$MISSING" ]; then
-            echo "::error::Missing exported symbols: $MISSING"
-            exit 1
-          fi
-          echo "::notice::All $(wc -l < /tmp/expected.txt) expected Ts* symbols exported."
-
-      - name: Check no undefined symbols
-        if: env.SKIP_BUILD != '1'
-        run: |
-          set -euxo pipefail
-          UNDEF="$(nm -u dist/libTailscaleCore.dylib)"
-          echo "Undefined symbols (allowed: dyld stubs only):"
-          echo "$UNDEF"
-
-      - name: Build minimal probe dylib (bisect dlopen hang)
-        if: env.SKIP_BUILD != '1' && github.event.inputs.build_probe == 'true'
-        run: |
-          set -euxo pipefail
+          # c-shared emits a header next to the dylib (dist/libTailscaleCore.h
+          # would be written by go build; re-derive it here).
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mios-version-min=15.0"
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
-          CC="${CC}" \
-          CGO_CFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
-          CGO_LDFLAGS="-arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
-          go build -buildmode=c-archive -trimpath -ldflags "-s -w" \
-            -o dist/probe.a ./cmd/tscoreprobe
-          clang -dynamiclib -arch arm64 -isysroot "${SDK}" -mios-version-min=15.0 \
-            -Wl,-all_load -Wl,-ObjC dist/probe.a \
-            -framework Foundation -framework Security -framework CoreFoundation \
-            -o dist/ProbeMinimal.dylib
-          codesign -s - --force dist/ProbeMinimal.dylib
-          file dist/ProbeMinimal.dylib
-          lipo -info dist/ProbeMinimal.dylib || true
-
-      - name: Upload probe artifact
-        if: env.SKIP_BUILD != '1' && github.event.inputs.build_probe == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ProbeMinimal
-          path: dist/ProbeMinimal.dylib
-          if-no-files-found: error
+          CC="$(xcrun --find clang) -arch arm64 -isysroot ${SDK} -mios-version-min=15.0" \
+          go build -buildmode=c-shared -trimpath -o /tmp/header-probe ./cmd/tscore 2>/dev/null || true
+          ls /tmp/header-probe.h 2>/dev/null && cp /tmp/header-probe.h dist/libTailscaleCore.h || echo "using generated header from build"
 
       - name: Upload artifact
-        if: env.SKIP_BUILD != '1'
         uses: actions/upload-artifact@v4
         with:
           name: libTailscaleCore-ios
           path: |
             dist/libTailscaleCore.dylib
             dist/libTailscaleCore-lazy.dylib
+            dist/TsCoreVerify.ipa
             dist/libTailscaleCore.h
           if-no-files-found: error
 
       - name: Create GitHub Release
-        if: env.SKIP_BUILD != '1'
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          TAG="${{ inputs.release_tag }}"
-          if [ -z "$TAG" ] && [ "${{ github.event_name }}" = "push" ]; then
-            TAG="$GITHUB_REF_NAME"
-          fi
-          if [ -z "$TAG" ]; then
-            TAG="manual-$(date +%Y%m%d-%H%M%S)"
-          fi
+          TAG="$GITHUB_REF_NAME"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG already exists; skipping."
             exit 0
           fi
-          NOTES="Automated build of the Tailscale core dylib for iOS sideloading."
-          NOTES="${NOTES}
-          - libTailscaleCore.dylib: arm64 Mach-O dylib (Go c-archive -> clang dynamiclib), iOS 15+; ctor auto-starts Go runtime at dlopen
-          - libTailscaleCore-lazy.dylib: same, but initializer stripped - host calls TsEnsureInit() right after dlopen (recommended: avoids ctor-time pthread_create deadlock under iOS dlopen)
-          - libTailscaleCore.h: generated C header (all Ts* exports)
+          NOTES="Tailscale core dylib for iOS sideloading (c-shared mechanism, verified on the iOS simulator).
+          - libTailscaleCore.dylib: C ABI, ctor starts the Go runtime at dlopen
+          - libTailscaleCore-lazy.dylib: initializer stripped; host calls TsEnsureInit()
+          - TsCoreVerify.ipa: on-device verification app (dlopen + exported calls)
+          - libTailscaleCore.h: C header
 
-          See cmd/tscore/README.md for integration details."
+          See cmd/tscore/README.md + LIVECONTAINER.md."
           gh release create "$TAG" \
-            dist/libTailscaleCore.dylib dist/libTailscaleCore-lazy.dylib dist/libTailscaleCore.h \
+            dist/libTailscaleCore.dylib dist/libTailscaleCore-lazy.dylib dist/TsCoreVerify.ipa dist/libTailscaleCore.h \
             --repo "$GITHUB_REPOSITORY" \
             --title "Tailscale Core dylib $TAG" \
             --notes "$NOTES"
