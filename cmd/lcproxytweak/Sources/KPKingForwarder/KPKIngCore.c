@@ -19,13 +19,17 @@
 static void (*g_kp_dbg_log)(const char *line) = NULL;
 static char g_kp_dbg_recent[8][512];   // 近期诊断环形缓冲（API 失败时回传）
 static int g_kp_dbg_recent_n = 0;
+static pthread_mutex_t g_kp_dbg_lock = PTHREAD_MUTEX_INITIALIZER;  // 多线程安全
 
 void kp_set_debug_logger(void (*fn)(const char *line)) {
+    pthread_mutex_lock(&g_kp_dbg_lock);
     g_kp_dbg_log = fn;
+    pthread_mutex_unlock(&g_kp_dbg_lock);
 }
 
 void kp_debug_recent(char *out, size_t cap) {
     if (!out || cap == 0) return;
+    pthread_mutex_lock(&g_kp_dbg_lock);
     out[0] = '\0';
     size_t used = 0;
     for (int i = 0; i < g_kp_dbg_recent_n && used < cap - 1; i++) {
@@ -37,6 +41,7 @@ void kp_debug_recent(char *out, size_t cap) {
         out[used++] = '\n';
         out[used] = '\0';
     }
+    pthread_mutex_unlock(&g_kp_dbg_lock);
 }
 
 void kp_dbg(const char *fmt, ...) {
@@ -45,14 +50,16 @@ void kp_dbg(const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
+    pthread_mutex_lock(&g_kp_dbg_lock);
     if (g_kp_dbg_log) g_kp_dbg_log(line);
-    // 环形缓冲
-    int idx = g_kp_dbg_recent_n < 8 ? g_kp_dbg_recent_n++ : 0;
+    // 环形缓冲：存最近 8 条（满则整体前移）
+    int idx = g_kp_dbg_recent_n < 8 ? g_kp_dbg_recent_n++ : 7;
     if (g_kp_dbg_recent_n > 8) {
         for (int i = 1; i < 8; i++) memcpy(g_kp_dbg_recent[i - 1], g_kp_dbg_recent[i], 512);
-        idx = 7;
+        g_kp_dbg_recent_n = 8;
     }
     snprintf(g_kp_dbg_recent[idx], 512, "%s", line);
+    pthread_mutex_unlock(&g_kp_dbg_lock);
 }
 
 #if defined(__APPLE__) || defined(__unix__)
